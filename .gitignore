@@ -1,0 +1,4 @@
+report.xml
+*.test
+/tmp/
+.DS_Store
