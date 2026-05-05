@@ -324,6 +324,24 @@ func (l *Lexer) scanOperator(pos Position) (Token, error) {
 	return Token{}, errorf(pos, "unexpected character %q", first)
 }
 
+// IsBareIdentifier reports whether s can be written in SQL without double
+// quotes: it must be a non-empty run of identifier characters that does not
+// start with a digit and is not a reserved word.
+func IsBareIdentifier(s string) bool {
+	if s == "" || IsReserved(s) {
+		return false
+	}
+	for i, r := range s {
+		if i == 0 && !isIdentStart(r) {
+			return false
+		}
+		if i > 0 && !isIdentPart(r) {
+			return false
+		}
+	}
+	return true
+}
+
 func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
 func isIdentStart(r rune) bool {
