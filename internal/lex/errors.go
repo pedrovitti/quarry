@@ -28,17 +28,25 @@ func errorf(pos Position, format string, args ...any) *Error {
 //
 // If the position does not fall inside src the plain message is returned.
 func (e *Error) Annotate(src string) string {
+	return Annotate(src, e.Pos, e.Error(), e.Msg)
+}
+
+// Annotate renders line pos.Line of src with a caret under pos.Column. header
+// is the first line of the output and msg is written after the caret. Callers
+// outside this package use it to format their own positioned errors the same
+// way; if pos does not fall inside src, header is returned unchanged.
+func Annotate(src string, pos Position, header, msg string) string {
 	lines := strings.Split(src, "\n")
-	if e.Pos.Line < 1 || e.Pos.Line > len(lines) {
-		return e.Error()
+	if pos.Line < 1 || pos.Line > len(lines) {
+		return header
 	}
-	line := lines[e.Pos.Line-1]
+	line := lines[pos.Line-1]
 
 	// Column is counted in runes; pad with the source's own tabs so the caret
 	// stays aligned in terminals with any tab width.
 	var pad strings.Builder
 	for i, r := range []rune(line) {
-		if i >= e.Pos.Column-1 {
+		if i >= pos.Column-1 {
 			break
 		}
 		if r == '\t' {
@@ -47,5 +55,5 @@ func (e *Error) Annotate(src string) string {
 			pad.WriteByte(' ')
 		}
 	}
-	return fmt.Sprintf("%s\n%s\n%s^ %s", e.Error(), line, pad.String(), e.Msg)
+	return fmt.Sprintf("%s\n%s\n%s^ %s", header, line, pad.String(), msg)
 }
