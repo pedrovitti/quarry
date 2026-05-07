@@ -37,7 +37,7 @@ func Dump(n Node) string {
 		return list(op, Dump(node.Operand))
 
 	case *FuncCall:
-		parts := []string{"call", node.Name}
+		parts := []string{"call", QuoteIdent(node.Name)}
 		for _, arg := range node.Args {
 			parts = append(parts, Dump(arg))
 		}
@@ -55,9 +55,9 @@ func Dump(n Node) string {
 
 	case *TableName:
 		if node.Alias == "" {
-			return node.Name
+			return QuoteIdent(node.Name)
 		}
-		return list("as", node.Name, node.Alias)
+		return list("as", QuoteIdent(node.Name), QuoteIdent(node.Alias))
 
 	case *Join:
 		return list("join", Dump(node.Left), Dump(node.Right), Dump(node.On))
@@ -66,9 +66,9 @@ func Dump(n Node) string {
 		return dumpSelect(node)
 
 	case *Insert:
-		parts := []string{"insert", node.Table}
+		parts := []string{"insert", QuoteIdent(node.Table)}
 		if len(node.Columns) > 0 {
-			parts = append(parts, list(node.Columns...))
+			parts = append(parts, list(quoteAll(node.Columns)...))
 		}
 		for _, row := range node.Rows {
 			parts = append(parts, list(dumpAll(row)...))
@@ -76,9 +76,9 @@ func Dump(n Node) string {
 		return list(parts...)
 
 	case *Update:
-		parts := []string{"update", node.Table}
+		parts := []string{"update", QuoteIdent(node.Table)}
 		for _, set := range node.Set {
-			parts = append(parts, list("set", set.Column, Dump(set.Value)))
+			parts = append(parts, list("set", QuoteIdent(set.Column), Dump(set.Value)))
 		}
 		if node.Where != nil {
 			parts = append(parts, list("where", Dump(node.Where)))
@@ -86,16 +86,16 @@ func Dump(n Node) string {
 		return list(parts...)
 
 	case *Delete:
-		parts := []string{"delete", node.Table}
+		parts := []string{"delete", QuoteIdent(node.Table)}
 		if node.Where != nil {
 			parts = append(parts, list("where", Dump(node.Where)))
 		}
 		return list(parts...)
 
 	case *CreateTable:
-		parts := []string{"create-table", node.Name}
+		parts := []string{"create-table", QuoteIdent(node.Name)}
 		for _, column := range node.Columns {
-			def := []string{column.Name, column.Type.String()}
+			def := []string{QuoteIdent(column.Name), column.Type.String()}
 			if column.NotNull {
 				def = append(def, "not-null")
 			}
@@ -104,7 +104,7 @@ func Dump(n Node) string {
 		return list(parts...)
 
 	case *DropTable:
-		return list("drop-table", node.Name)
+		return list("drop-table", QuoteIdent(node.Name))
 	}
 	return "?"
 }
@@ -149,6 +149,14 @@ func dumpSelect(s *Select) string {
 		parts = append(parts, list("offset", Dump(s.Offset)))
 	}
 	return list(parts...)
+}
+
+func quoteAll(names []string) []string {
+	out := make([]string, len(names))
+	for i, name := range names {
+		out[i] = QuoteIdent(name)
+	}
+	return out
 }
 
 func dumpAll(exprs []Expr) []string {
