@@ -24,6 +24,11 @@ type Shell struct {
 	// echo prints each statement before running it, which is what makes the
 	// output of a script readable on its own.
 	echo bool
+
+	// mode is how results are rendered, and separator is what list mode puts
+	// between fields.
+	mode      Mode
+	separator string
 }
 
 // New returns a shell over a fresh database.
@@ -36,6 +41,12 @@ func (s *Shell) Engine() *exec.Engine { return s.engine }
 
 // SetEcho turns statement echoing on or off.
 func (s *Shell) SetEcho(on bool) { s.echo = on }
+
+// SetMode chooses how results are rendered.
+func (s *Shell) SetMode(mode Mode) { s.mode = mode }
+
+// Mode is the current output mode.
+func (s *Shell) Mode() Mode { return s.mode }
 
 // Prompt is what the shell would print before the next line: the primary
 // prompt normally, a continuation prompt inside an unfinished statement.
@@ -112,10 +123,14 @@ func (s *Shell) RunStatements(source string) bool {
 			fmt.Fprintf(s.errOut, "error: %s\n", err)
 			return false
 		}
-		if table := Format(result); table != "" {
-			fmt.Fprint(s.out, table)
+		if rendered := Render(result, s.mode, s.separator); rendered != "" {
+			fmt.Fprint(s.out, rendered)
 		}
-		fmt.Fprintf(s.out, "(%s)\n", Summary(result))
+		// The trailing count is for a person reading along; the machine
+		// readable modes leave it out so their output stays parseable.
+		if s.mode == TableMode || s.mode == ColumnMode {
+			fmt.Fprintf(s.out, "(%s)\n", Summary(result))
+		}
 	}
 	return true
 }

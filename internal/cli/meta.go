@@ -41,6 +41,16 @@ func (s *Shell) Meta(line string) (string, error) {
 	case ".functions":
 		return strings.Join(fn.Names(), ", "), nil
 
+	case ".mode":
+		return s.setMode(args)
+
+	case ".separator":
+		if len(args) != 1 {
+			return "", fmt.Errorf(".separator takes one string")
+		}
+		s.separator = args[0]
+		return "separator is " + s.separator, nil
+
 	case ".read":
 		if len(args) != 1 {
 			return "", fmt.Errorf(".read takes a file name")
@@ -68,11 +78,30 @@ func helpText() string {
 		".tables            list the tables",
 		".schema [table]    show the schema of one table, or of every table",
 		".functions         list the scalar functions",
+		".mode MODE         set the output format (" + strings.Join(ModeNames(), ", ") + ")",
+		".separator S       set the field separator used by list mode",
 		".read FILE         run the statements in a file",
 		".save FILE         write the database to a file",
 		".open FILE         replace the database with the contents of a file",
 		".quit              leave",
 	}, "\n")
+}
+
+// setMode changes the output format, or reports the current one.
+func (s *Shell) setMode(args []string) (string, error) {
+	if len(args) == 0 {
+		return "mode is " + s.mode.String(), nil
+	}
+	if len(args) > 1 {
+		return "", fmt.Errorf(".mode takes one name")
+	}
+	mode, ok := LookupMode(args[0])
+	if !ok {
+		return "", fmt.Errorf("unknown mode %q; quarry has %s",
+			args[0], strings.Join(ModeNames(), ", "))
+	}
+	s.mode = mode
+	return "mode is " + mode.String(), nil
 }
 
 func (s *Shell) listTables() string {
