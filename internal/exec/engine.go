@@ -24,6 +24,15 @@ func New() *Engine {
 // Catalog exposes the schemas, for callers that introspect.
 func (e *Engine) Catalog() *catalog.Catalog { return e.catalog }
 
+// RowCount is how many live rows a table holds, without reading them.
+func (e *Engine) RowCount(table string) (int, error) {
+	heap, err := e.store.Get(table)
+	if err != nil {
+		return 0, errorf("%s", err)
+	}
+	return heap.Len(), nil
+}
+
 // Result is what running a statement produced.
 //
 // A SELECT fills Columns and Rows. Everything else fills Affected and leaves

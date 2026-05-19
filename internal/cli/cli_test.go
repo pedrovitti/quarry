@@ -448,3 +448,101 @@ func TestEcho(t *testing.T) {
 		t.Errorf("the statement was not echoed:\n%s", got)
 	}
 }
+
+func TestMetaDump(t *testing.T) {
+	s, drain := shell(t)
+	run(t, s, drain, "CREATE TABLE t (a INT, b TEXT)")
+	run(t, s, drain, "INSERT INTO t VALUES (1, 'x')")
+
+	got, err := s.Meta(".dump")
+	if err != nil {
+		t.Fatalf(".dump returned error: %v", err)
+	}
+	if !strings.Contains(got, "CREATE TABLE t") {
+		t.Errorf(".dump omitted the schema:\n%s", got)
+	}
+	if !strings.Contains(got, "INSERT INTO t") {
+		t.Errorf(".dump omitted the rows:\n%s", got)
+	}
+	if _, err := s.Meta(".dump extra"); err == nil {
+		t.Error(".dump accepted an argument")
+	}
+}
+
+func TestMetaStats(t *testing.T) {
+	s, drain := shell(t)
+
+	got, err := s.Meta(".stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "no tables" {
+		t.Errorf("empty database reported %q", got)
+	}
+
+	run(t, s, drain, "CREATE TABLE zebra (a INT)")
+	run(t, s, drain, "CREATE TABLE apple (a INT, b TEXT)")
+	run(t, s, drain, "INSERT INTO zebra VALUES (1), (2), (3)")
+
+	got, err = s.Meta(".stats")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Tables come out in name order, so the output is stable.
+	if !strings.HasPrefix(got, "apple: 2 columns, 0 rows") {
+		t.Errorf(".stats = %q", got)
+	}
+	if !strings.Contains(got, "zebra: 1 column, 3 rows") {
+		t.Errorf(".stats = %q", got)
+	}
+	if !strings.Contains(got, "3 rows across 2 tables") {
+		t.Errorf(".stats total = %q", got)
+	}
+}
+
+func TestMetaTimer(t *testing.T) {
+	s, drain := shell(t)
+	run(t, s, drain, "CREATE TABLE t (a INT)")
+
+	if got, err := s.Meta(".timer"); err != nil || got != "timer is off" {
+		t.Fatalf(".timer reported %q, %v", got, err)
+	}
+	if _, err := s.Meta(".timer on"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := run(t, s, drain, "SELECT * FROM t")
+	if !strings.Contains(got, "took ") {
+		t.Errorf("no timing line:\n%s", got)
+	}
+
+	if _, err := s.Meta(".timer off"); err != nil {
+		t.Fatal(err)
+	}
+	got = run(t, s, drain, "SELECT * FROM t")
+	if strings.Contains(got, "took ") {
+		t.Errorf("timing printed after .timer off:\n%s", got)
+	}
+
+	if _, err := s.Meta(".timer maybe"); err == nil {
+		t.Error(".timer accepted a value that is not on or off")
+	}
+}
+
+func TestRowCount(t *testing.T) {
+	s, drain := shell(t)
+	run(t, s, drain, "CREATE TABLE t (a INT)")
+	run(t, s, drain, "INSERT INTO t VALUES (1), (2), (3)")
+	run(t, s, drain, "DELETE FROM t WHERE a = 2")
+
+	count, err := s.Engine().RowCount("t")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("RowCount = %d, want 2 -- deleted rows must not count", count)
+	}
+	if _, err := s.Engine().RowCount("nope"); err == nil {
+		t.Error("RowCount on a missing table succeeded")
+	}
+}

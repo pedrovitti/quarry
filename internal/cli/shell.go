@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/pedrovitti/quarry/internal/exec"
 	"github.com/pedrovitti/quarry/internal/lex"
@@ -29,6 +30,8 @@ type Shell struct {
 	// between fields.
 	mode      Mode
 	separator string
+	// timer prints how long each statement took.
+	timer bool
 }
 
 // New returns a shell over a fresh database.
@@ -118,6 +121,7 @@ func (s *Shell) RunStatements(source string) bool {
 		if s.echo {
 			fmt.Fprintf(s.out, "%s;\n", stmt)
 		}
+		started := time.Now()
 		result, err := s.engine.Run(stmt)
 		if err != nil {
 			fmt.Fprintf(s.errOut, "error: %s\n", err)
@@ -130,6 +134,9 @@ func (s *Shell) RunStatements(source string) bool {
 		// readable modes leave it out so their output stays parseable.
 		if s.mode == TableMode || s.mode == ColumnMode {
 			fmt.Fprintf(s.out, "(%s)\n", Summary(result))
+		}
+		if s.timer {
+			fmt.Fprintf(s.out, "took %s\n", time.Since(started).Round(time.Microsecond))
 		}
 	}
 	return true
