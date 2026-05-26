@@ -137,3 +137,171 @@ func TestDumpOfFunctionCalls(t *testing.T) {
 		})
 	}
 }
+
+// dumpSelect covers the clauses one at a time, so a change to any one of them
+// shows up as a single failure rather than in one long expected string.
+func TestDumpOfSelectClauses(t *testing.T) {
+	base := func() *Select {
+		return &Select{
+			Columns: []SelectItem{{Expr: col("", "id")}},
+			From:    &TableName{Name: "t"},
+		}
+	}
+
+	tests := []struct {
+		name string
+		stmt func(*Select) *Select
+		want string
+	}{
+		{
+			"columns and from",
+			func(s *Select) *Select { return s },
+			"(select (columns id) (from t))",
+		},
+		{
+			"distinct comes first",
+			func(s *Select) *Select { s.Distinct = true; return s },
+			"(select distinct (columns id) (from t))",
+		},
+		{
+			"an aliased column",
+			func(s *Select) *Select {
+				s.Columns = []SelectItem{{Expr: col("", "id"), Alias: "n"}}
+				return s
+			},
+			"(select (columns (as id n)) (from t))",
+		},
+		{
+			"several columns",
+			func(s *Select) *Select {
+				s.Columns = []SelectItem{{Expr: col("", "a")}, {Expr: col("", "b")}}
+				return s
+			},
+			"(select (columns a b) (from t))",
+		},
+		{
+			"a star",
+			func(s *Select) *Select {
+				s.Columns = []SelectItem{{Expr: &Star{}}}
+				return s
+			},
+			"(select (columns *) (from t))",
+		},
+		{
+			"where",
+			func(s *Select) *Select {
+				s.Where = &BinaryExpr{Op: Equal, Left: col("", "id"), Right: lit(IntLit, "1")}
+				return s
+			},
+			"(select (columns id) (from t) (where (= id 1)))",
+		},
+		{
+			"order by ascending",
+			func(s *Select) *Select {
+				s.OrderBy = []OrderItem{{Expr: col("", "id")}}
+				return s
+			},
+			"(select (columns id) (from t) (order (asc id)))",
+		},
+		{
+			"order by descending",
+			func(s *Select) *Select {
+				s.OrderBy = []OrderItem{{Expr: col("", "id"), Desc: true}}
+				return s
+			},
+			"(select (columns id) (from t) (order (desc id)))",
+		},
+		{
+			"several order keys keep their direction each",
+			func(s *Select) *Select {
+				s.OrderBy = []OrderItem{{Expr: col("", "a"), Desc: true}, {Expr: col("", "b")}}
+				return s
+			},
+			"(select (columns id) (from t) (order (desc a) (asc b)))",
+		},
+		{
+			"limit",
+			func(s *Select) *Select { s.Limit = lit(IntLit, "10"); return s },
+			"(select (columns id) (from t) (limit 10))",
+		},
+		{
+			"offset",
+			func(s *Select) *Select { s.Offset = lit(IntLit, "5"); return s },
+			"(select (columns id) (from t) (offset 5))",
+		},
+		{
+			"limit before offset, whatever the source order",
+			func(s *Select) *Select {
+				s.Offset = lit(IntLit, "5")
+				s.Limit = lit(IntLit, "10")
+				return s
+			},
+			"(select (columns id) (from t) (limit 10) (offset 5))",
+		},
+		{
+			"an aliased table",
+			func(s *Select) *Select { s.From = &TableName{Name: "t", Alias: "x"}; return s },
+			"(select (columns id) (from (as t x)))",
+		},
+		{
+			"a join",
+			func(s *Select) *Select {
+				s.From = &Join{
+					Left:  &TableName{Name: "a"},
+					Right: &TableName{Name: "b"},
+					On:    &BinaryExpr{Op: Equal, Left: col("a", "id"), Right: col("b", "id")},
+				}
+				return s
+			},
+			"(select (columns id) (from (join a b (= a.id b.id))))",
+		},
+		{
+			"a chain of joins nests to the left",
+			func(s *Select) *Select {
+				s.From = &Join{
+					Left: &Join{
+						Left:  &TableName{Name: "a"},
+						Right: &TableName{Name: "b"},
+						On:    lit(BoolLit, "true"),
+					},
+					Right: &TableName{Name: "c"},
+					On:    lit(BoolLit, "true"),
+				}
+				return s
+			},
+			"(select (columns id) (from (join (join a b TRUE) c TRUE)))",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Dump(tt.stmt(base())); got != tt.want {
+				t.Errorf("=    %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDumpOfSelectWithoutFrom(t *testing.T) {
+	// SELECT 1 has no FROM, and the clause is omitted rather than dumped empty.
+	s := &Select{Columns: []SelectItem{{Expr: lit(IntLit, "1")}}}
+	if got, want := Dump(s), "(select (columns 1))"; got != want {
+		t.Errorf("= %q, want %q", got, want)
+	}
+}
+
+func TestDumpOfEverySelectClauseAtOnce(t *testing.T) {
+	s := &Select{
+		Distinct: true,
+		Columns:  []SelectItem{{Expr: col("t", "a"), Alias: "x"}},
+		From:     &TableName{Name: "t"},
+		Where:    &IsNullExpr{Operand: col("t", "b"), Negated: true},
+		OrderBy:  []OrderItem{{Expr: col("t", "a"), Desc: true}},
+		Limit:    lit(IntLit, "10"),
+		Offset:   lit(IntLit, "20"),
+	}
+	want := "(select distinct (columns (as t.a x)) (from t) (where (is-not-null t.b)) " +
+		"(order (desc t.a)) (limit 10) (offset 20))"
+	if got := Dump(s); got != want {
+		t.Errorf("=    %s\nwant %s", got, want)
+	}
+}
