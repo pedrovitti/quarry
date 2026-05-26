@@ -305,3 +305,99 @@ func TestDumpOfEverySelectClauseAtOnce(t *testing.T) {
 		t.Errorf("=    %s\nwant %s", got, want)
 	}
 }
+
+func TestDumpOfInsert(t *testing.T) {
+	one, two := lit(IntLit, "1"), lit(IntLit, "2")
+	tests := []struct {
+		name string
+		node *Insert
+		want string
+	}{
+		{
+			"without a column list",
+			&Insert{Table: "t", Rows: [][]Expr{{one, two}}},
+			"(insert t (1 2))",
+		},
+		{
+			"with a column list",
+			&Insert{Table: "t", Columns: []string{"a", "b"}, Rows: [][]Expr{{one, two}}},
+			"(insert t (a b) (1 2))",
+		},
+		{
+			"several rows",
+			&Insert{Table: "t", Rows: [][]Expr{{one}, {two}}},
+			"(insert t (1) (2))",
+		},
+		{
+			"a column name needing quotes",
+			&Insert{Table: "t", Columns: []string{"from"}, Rows: [][]Expr{{one}}},
+			`(insert t ("from") (1))`,
+		},
+		{
+			"expressions, not just constants",
+			&Insert{Table: "t", Rows: [][]Expr{{&BinaryExpr{Op: Add, Left: one, Right: two}}}},
+			"(insert t ((+ 1 2)))",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Dump(tt.node); got != tt.want {
+				t.Errorf("=    %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDumpOfUpdate(t *testing.T) {
+	one := lit(IntLit, "1")
+	where := &BinaryExpr{Op: Equal, Left: col("", "id"), Right: one}
+
+	tests := []struct {
+		name string
+		node *Update
+		want string
+	}{
+		{
+			"one assignment, every row",
+			&Update{Table: "t", Set: []Assignment{{Column: "a", Value: one}}},
+			"(update t (set a 1))",
+		},
+		{
+			"several assignments keep their order",
+			&Update{Table: "t", Set: []Assignment{
+				{Column: "a", Value: one},
+				{Column: "b", Value: col("", "a")},
+			}},
+			"(update t (set a 1) (set b a))",
+		},
+		{
+			"with a where",
+			&Update{Table: "t", Set: []Assignment{{Column: "a", Value: one}}, Where: where},
+			"(update t (set a 1) (where (= id 1)))",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Dump(tt.node); got != tt.want {
+				t.Errorf("=    %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDumpOfDelete(t *testing.T) {
+	// A missing WHERE means every row, and the dump says so by omission -
+	// which is worth a test, since it is the difference between deleting one
+	// row and the table.
+	all := &Delete{Table: "t"}
+	if got, want := Dump(all), "(delete t)"; got != want {
+		t.Errorf("= %q, want %q", got, want)
+	}
+
+	one := &Delete{Table: "t", Where: &BinaryExpr{
+		Op: Equal, Left: col("", "id"), Right: lit(IntLit, "1"),
+	}}
+	if got, want := Dump(one), "(delete t (where (= id 1)))"; got != want {
+		t.Errorf("= %q, want %q", got, want)
+	}
+}
