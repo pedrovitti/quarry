@@ -401,3 +401,74 @@ func TestDumpOfDelete(t *testing.T) {
 		t.Errorf("= %q, want %q", got, want)
 	}
 }
+
+func TestDumpOfCreateTable(t *testing.T) {
+	tests := []struct {
+		name string
+		node *CreateTable
+		want string
+	}{
+		{
+			"one column",
+			&CreateTable{Name: "t", Columns: []ColumnDef{{Name: "a", Type: IntType}}},
+			"(create-table t (a INT))",
+		},
+		{
+			"not null is part of the column",
+			&CreateTable{Name: "t", Columns: []ColumnDef{{Name: "a", Type: IntType, NotNull: true}}},
+			"(create-table t (a INT not-null))",
+		},
+		{
+			"every type",
+			&CreateTable{Name: "t", Columns: []ColumnDef{
+				{Name: "a", Type: IntType},
+				{Name: "b", Type: BigIntType},
+				{Name: "c", Type: FloatType},
+				{Name: "d", Type: TextType},
+				{Name: "e", Type: BoolType},
+			}},
+			"(create-table t (a INT) (b BIGINT) (c FLOAT) (d TEXT) (e BOOL))",
+		},
+		{
+			"names needing quotes",
+			&CreateTable{Name: "select", Columns: []ColumnDef{{Name: "order by", Type: TextType}}},
+			`(create-table "select" ("order by" TEXT))`,
+		},
+		{
+			"no columns",
+			&CreateTable{Name: "t"},
+			"(create-table t)",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Dump(tt.node); got != tt.want {
+				t.Errorf("=    %s\nwant %s", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDumpOfCreateTableUsesTheCanonicalTypeName(t *testing.T) {
+	// The source may have said INTEGER or VARCHAR; the tree holds the type it
+	// resolved to, so the dump shows that rather than the spelling.
+	for _, spelling := range []string{"INTEGER", "integer", "int"} {
+		typ, ok := LookupType(spelling)
+		if !ok {
+			t.Fatalf("LookupType(%q) found nothing", spelling)
+		}
+		node := &CreateTable{Name: "t", Columns: []ColumnDef{{Name: "a", Type: typ}}}
+		if got, want := Dump(node), "(create-table t (a INT))"; got != want {
+			t.Errorf("%q dumped as %q, want %q", spelling, got, want)
+		}
+	}
+}
+
+func TestDumpOfDropTable(t *testing.T) {
+	if got, want := Dump(&DropTable{Name: "t"}), "(drop-table t)"; got != want {
+		t.Errorf("= %q, want %q", got, want)
+	}
+	if got, want := Dump(&DropTable{Name: "a b"}), `(drop-table "a b")`; got != want {
+		t.Errorf("= %q, want %q", got, want)
+	}
+}
