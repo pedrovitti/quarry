@@ -1,4 +1,8 @@
 report.xml
+# Compiled test binaries, which go test leaves in the package directory. The
+# negation is what keeps the logictest data files: they are also *.test, and
+# without it a fresh clone has no test data at all.
 *.test
+!**/testdata/*.test
 /tmp/
 .DS_Store
