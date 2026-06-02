@@ -1,0 +1,174 @@
+# Scalar functions and the errors they raise.
+
+statement ok
+CREATE TABLE words (id INT, w TEXT)
+
+statement ok
+INSERT INTO words VALUES (1, 'Hello'), (2, '  padded  '), (3, 'héllo'), (4, NULL)
+
+query
+SELECT upper(w), lower(w) FROM words WHERE id = 1
+----
+upper(w)|lower(w)
+HELLO|hello
+
+query
+SELECT trim(w) FROM words WHERE id = 2
+----
+trim(w)
+padded
+
+# length counts characters, not bytes.
+query
+SELECT w, length(w) FROM words WHERE id = 3
+----
+w|length(w)
+héllo|5
+
+query
+SELECT length(''), length('abc')
+----
+length('')|length('abc')
+0|3
+
+query
+SELECT substr('abcdef', 1), substr('abcdef', 3), substr('abcdef', 2, 3)
+----
+substr('abcdef', 1)|substr('abcdef', 3)|substr('abcdef', 2, 3)
+abcdef|cdef|bcd
+
+# A start past the end gives an empty string rather than an error, and a start
+# below one is clamped.
+query
+SELECT substr('abc', 99), substr('abc', 0), substr('abc', -5)
+----
+substr('abc', 99)|substr('abc', 0)|substr('abc', -5)
+|abc|abc
+
+query
+SELECT substr('héllo', 2, 2)
+----
+substr('héllo', 2, 2)
+él
+
+query
+SELECT replace('a-b-c', '-', '+'), replace('abc', 'z', '+')
+----
+replace('a-b-c', '-', '+')|replace('abc', 'z', '+')
+a+b+c|abc
+
+query
+SELECT abs(-5), abs(5), abs(0), abs(-1.5)
+----
+abs(-5)|abs(5)|abs(0)|abs(-1.5)
+5|5|0|1.5
+
+query
+SELECT round(1.4), round(1.6), round(2.5), round(-1.6)
+----
+round(1.4)|round(1.6)|round(2.5)|round(-1.6)
+1|2|3|-2
+
+query
+SELECT floor(1.9), floor(-1.1), ceil(1.1), ceil(-1.9)
+----
+floor(1.9)|floor(-1.1)|ceil(1.1)|ceil(-1.9)
+1|-2|2|-1
+
+# Rounding an integer leaves it alone rather than converting it.
+query
+SELECT round(7), floor(7), ceil(7), typeof(round(7))
+----
+round(7)|floor(7)|ceil(7)|typeof(round(7))
+7|7|7|INT
+
+query
+SELECT coalesce(NULL, 2), coalesce(1, 2), coalesce(NULL, NULL, 'z')
+----
+coalesce(NULL, 2)|coalesce(1, 2)|coalesce(NULL, NULL, 'z')
+2|1|z
+
+query
+SELECT ifnull(NULL, 'x'), ifnull('a', 'x')
+----
+ifnull(NULL, 'x')|ifnull('a', 'x')
+x|a
+
+# Function names are case insensitive, like keywords.
+query
+SELECT UPPER('a'), Upper('a'), upper('a')
+----
+UPPER('a')|Upper('a')|upper('a')
+A|A|A
+
+# Calls nest.
+query
+SELECT upper(substr(trim('  hello  '), 1, 3))
+----
+upper(substr(trim('  hello  '), 1, 3))
+HEL
+
+query
+SELECT length(coalesce(w, '')) FROM words ORDER BY id
+----
+length(coalesce(w, ''))
+5
+10
+5
+0
+
+statement error no function "nosuch"
+SELECT nosuch(1)
+
+statement error upper takes 1 argument
+SELECT upper('a', 'b')
+
+statement error upper takes 1 argument
+SELECT upper()
+
+statement error substr takes 2 to 3 arguments
+SELECT substr('a')
+
+statement error replace takes 3 arguments
+SELECT replace('a', 'b')
+
+statement error at least 1 argument
+SELECT coalesce()
+
+statement error upper needs text
+SELECT upper(1)
+
+statement error abs needs a number
+SELECT abs('x')
+
+statement error substr length must not be negative
+SELECT substr('abc', 1, -1)
+
+# Operator type errors are caught before any row is read, so they are reported
+# even against an empty table.
+statement ok
+CREATE TABLE empty (a INT, s TEXT)
+
+statement error cannot compare TEXT with INT
+SELECT * FROM empty WHERE s > 1
+
+statement error cannot apply + to TEXT and INT
+SELECT s + 1 FROM empty
+
+statement error || needs text
+SELECT a || 'x' FROM empty
+
+statement error needs booleans
+SELECT * FROM empty WHERE a AND a
+
+query
+SELECT 'a' || 'b' || 'c'
+----
+'a' || 'b' || 'c'
+abc
+
+statement error division by zero
+SELECT 1 / 0
+
+statement error division by zero
+SELECT 1 % 0

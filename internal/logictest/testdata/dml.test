@@ -1,0 +1,214 @@
+# INSERT, UPDATE, DELETE and the schema statements behind them.
+
+statement ok
+CREATE TABLE t (id INT NOT NULL, name TEXT, score FLOAT)
+
+statement error already exists
+CREATE TABLE t (id INT)
+
+statement error does not exist
+SELECT * FROM nope
+
+statement error does not exist
+DROP TABLE nope
+
+# Type names normalize, so these are the same table shape written differently.
+statement ok
+CREATE TABLE aliases (a INTEGER, b VARCHAR, c BOOLEAN, d DOUBLE)
+
+query
+SELECT * FROM aliases
+----
+a|b|c|d
+
+statement error unknown column type "BLOB"
+CREATE TABLE bad (a BLOB)
+
+statement error is defined twice
+CREATE TABLE bad (a INT, a TEXT)
+
+statement ok
+INSERT INTO t VALUES (1, 'ada', 1.5)
+
+statement ok
+INSERT INTO t VALUES (2, 'bob', 2.5), (3, 'cy', 3.5)
+
+query
+SELECT * FROM t
+----
+id|name|score
+1|ada|1.5
+2|bob|2.5
+3|cy|3.5
+
+# Columns nobody names are NULL, not a zero of their declared type.
+statement ok
+INSERT INTO t (id) VALUES (4)
+
+query
+SELECT * FROM t WHERE id = 4
+----
+id|name|score
+4|NULL|NULL
+
+# Named columns may be given in any order.
+statement ok
+INSERT INTO t (score, name, id) VALUES (5.5, 'eve', 5)
+
+query
+SELECT * FROM t WHERE id = 5
+----
+id|name|score
+5|eve|5.5
+
+# An integer widens into a FLOAT column, but a float does not narrow into an
+# INT one and text is never read as a number.
+statement ok
+INSERT INTO t VALUES (6, 'fay', 7)
+
+query
+SELECT score FROM t WHERE id = 6
+----
+score
+7.0
+
+statement error cannot store FLOAT value in INT
+INSERT INTO t VALUES (1.5, 'x', 1.0)
+
+statement error cannot store TEXT value in INT
+INSERT INTO t VALUES ('x', 'x', 1.0)
+
+statement error 3 columns but 2 values
+INSERT INTO t VALUES (9, 'x')
+
+statement error no column "nope"
+INSERT INTO t (nope) VALUES (1)
+
+statement error named twice
+INSERT INTO t (id, id) VALUES (1, 2)
+
+# Values are expressions.
+statement ok
+INSERT INTO t VALUES (7 + 1, upper('gil'), 1.0 / 4)
+
+query
+SELECT * FROM t WHERE id = 8
+----
+id|name|score
+8|GIL|0.25
+
+# A failure part way through leaves nothing written.
+statement error must not be NULL
+INSERT INTO t VALUES (100, 'a', 1.0), (101, 'b', 2.0), (NULL, 'c', 3.0)
+
+query
+SELECT id FROM t WHERE id > 99
+----
+id
+
+statement ok
+UPDATE t SET name = 'ADA' WHERE id = 1
+
+query
+SELECT name FROM t WHERE id = 1
+----
+name
+ADA
+
+# An assignment computes from the row it is updating.
+statement ok
+UPDATE t SET score = score * 2 WHERE id = 2
+
+query
+SELECT score FROM t WHERE id = 2
+----
+score
+5.0
+
+# Assignments all read the row as it was before any of them ran, so this swaps.
+statement ok
+CREATE TABLE pair (a INT, b INT)
+
+statement ok
+INSERT INTO pair VALUES (1, 2)
+
+statement ok
+UPDATE pair SET a = b, b = a
+
+query
+SELECT * FROM pair
+----
+a|b
+2|1
+
+statement error assigned twice
+UPDATE pair SET a = 1, a = 2
+
+statement error no column "nope"
+UPDATE pair SET nope = 1
+
+# An UPDATE with no WHERE touches every row.
+statement ok
+UPDATE pair SET a = 9
+
+query
+SELECT * FROM pair
+----
+a|b
+9|1
+
+statement ok
+DELETE FROM t WHERE id = 8
+
+query
+SELECT id FROM t ORDER BY id
+----
+id
+1
+2
+3
+4
+5
+6
+
+# Deleting leaves a tombstone, so a later insert lands after the survivors
+# rather than filling the hole.
+statement ok
+DELETE FROM t WHERE id = 2
+
+statement ok
+INSERT INTO t VALUES (99, 'zed', 9.0)
+
+query
+SELECT id FROM t
+----
+id
+1
+3
+4
+5
+6
+99
+
+statement ok
+DELETE FROM t
+
+query
+SELECT * FROM t
+----
+id|name|score
+
+statement ok
+DROP TABLE t
+
+statement error does not exist
+SELECT * FROM t
+
+# Recreating a dropped table gives an empty one.
+statement ok
+CREATE TABLE t (id INT)
+
+query
+SELECT * FROM t
+----
+id

@@ -1,0 +1,164 @@
+# NULL and three-valued logic. These are the rules that surprise people, so
+# they are pinned closely.
+
+statement ok
+CREATE TABLE t (a INT, b INT, s TEXT)
+
+statement ok
+INSERT INTO t VALUES (1, 1, 'x'), (2, NULL, NULL), (NULL, 3, 'z')
+
+# NULL is not equal to itself. This is the whole reason IS NULL exists.
+query
+SELECT NULL = NULL
+----
+NULL = NULL
+NULL
+
+query
+SELECT NULL <> NULL
+----
+NULL <> NULL
+NULL
+
+query
+SELECT 1 = NULL, 1 <> NULL, 1 < NULL, 1 > NULL
+----
+1 = NULL|1 <> NULL|1 < NULL|1 > NULL
+NULL|NULL|NULL|NULL
+
+# IS NULL always answers, which is what makes it usable in a filter.
+query
+SELECT NULL IS NULL, NULL IS NOT NULL, 1 IS NULL, 1 IS NOT NULL
+----
+NULL IS NULL|NULL IS NOT NULL|1 IS NULL|1 IS NOT NULL
+true|false|false|true
+
+# Arithmetic propagates NULL, including where the other operand would
+# otherwise be an error.
+query
+SELECT NULL + 1, NULL * 0, NULL / 0
+----
+NULL + 1|NULL * 0|NULL / 0
+NULL|NULL|NULL
+
+# AND and OR do not simply propagate: false dominates AND, true dominates OR,
+# because the result cannot depend on what the unknown side turns out to be.
+query
+SELECT FALSE AND NULL, NULL AND FALSE, TRUE AND NULL, NULL AND NULL
+----
+FALSE AND NULL|NULL AND FALSE|TRUE AND NULL|NULL AND NULL
+false|false|NULL|NULL
+
+query
+SELECT TRUE OR NULL, NULL OR TRUE, FALSE OR NULL, NULL OR NULL
+----
+TRUE OR NULL|NULL OR TRUE|FALSE OR NULL|NULL OR NULL
+true|true|NULL|NULL
+
+query
+SELECT NOT NULL
+----
+NOT NULL
+NULL
+
+# A predicate that is unknown does not pass a filter, so a NULL row matches
+# neither a condition nor its negation.
+query
+SELECT a FROM t WHERE b = 3
+----
+a
+NULL
+
+query
+SELECT a FROM t WHERE b <> 3
+----
+a
+1
+
+query
+SELECT a FROM t WHERE b IS NULL
+----
+a
+2
+
+query
+SELECT a FROM t WHERE b IS NOT NULL
+----
+a
+1
+NULL
+
+# NULLs sort first ascending and last descending, so the order is total.
+query
+SELECT b FROM t ORDER BY b
+----
+b
+NULL
+1
+3
+
+query
+SELECT b FROM t ORDER BY b DESC
+----
+b
+3
+1
+NULL
+
+# DISTINCT groups NULLs together even though NULL = NULL is unknown: one of
+# the places SQL treats NULL as a value rather than an absence.
+statement ok
+CREATE TABLE n (a INT)
+
+statement ok
+INSERT INTO n VALUES (NULL), (NULL), (1), (NULL), (1)
+
+query
+SELECT DISTINCT a FROM n
+----
+a
+NULL
+1
+
+# Functions propagate NULL, except coalesce, which exists not to.
+query
+SELECT upper(NULL), length(NULL), abs(NULL), trim(NULL)
+----
+upper(NULL)|length(NULL)|abs(NULL)|trim(NULL)
+NULL|NULL|NULL|NULL
+
+query
+SELECT coalesce(NULL, NULL, 'fallback')
+----
+coalesce(NULL, NULL, 'fallback')
+fallback
+
+query
+SELECT coalesce(NULL, NULL)
+----
+coalesce(NULL, NULL)
+NULL
+
+query
+SELECT s, coalesce(s, 'unknown') FROM t ORDER BY a
+----
+s|coalesce(s, 'unknown')
+z|z
+x|x
+NULL|unknown
+
+# A NOT NULL column rejects both an explicit and an implied NULL.
+statement ok
+CREATE TABLE strict (id INT NOT NULL, note TEXT)
+
+statement error must not be NULL
+INSERT INTO strict VALUES (NULL, 'x')
+
+statement error must not be NULL
+INSERT INTO strict (note) VALUES ('x')
+
+statement ok
+INSERT INTO strict VALUES (1, NULL)
+
+statement error must not be NULL
+UPDATE strict SET id = NULL

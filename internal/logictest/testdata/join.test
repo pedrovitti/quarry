@@ -1,0 +1,110 @@
+# Inner joins.
+
+statement ok
+CREATE TABLE customers (id INT NOT NULL, name TEXT)
+
+statement ok
+CREATE TABLE orders (id INT, customer_id INT, total FLOAT)
+
+statement ok
+INSERT INTO customers VALUES (1, 'ada'), (2, 'bob'), (3, 'cy')
+
+statement ok
+INSERT INTO orders VALUES (10, 1, 99.5), (11, 1, 5.0), (12, 2, 20.0), (13, 99, 1.0)
+
+query
+SELECT c.name, o.total FROM customers c JOIN orders o ON c.id = o.customer_id ORDER BY o.id
+----
+name|total
+ada|99.5
+ada|5.0
+bob|20.0
+
+# Rows with no match on either side are dropped: cy has no orders and order 13
+# has no customer.
+query
+SELECT c.name FROM customers c JOIN orders o ON c.id = o.customer_id WHERE c.name = 'cy'
+----
+name
+
+query
+SELECT o.id FROM customers c JOIN orders o ON c.id = o.customer_id WHERE o.id = 13
+----
+id
+
+# An unqualified star over a join covers both sides, in order.
+query
+SELECT * FROM customers c JOIN orders o ON c.id = o.customer_id WHERE o.id = 12
+----
+id|name|id|customer_id|total
+2|bob|12|2|20.0
+
+query
+SELECT o.* FROM customers c JOIN orders o ON c.id = o.customer_id WHERE o.id = 12
+----
+id|customer_id|total
+12|2|20.0
+
+query
+SELECT o.id FROM customers c JOIN orders o ON c.id = o.customer_id AND o.total > 50
+----
+id
+10
+
+query
+SELECT o.id FROM customers c JOIN orders o ON c.id = o.customer_id WHERE o.total > 10 ORDER BY o.id
+----
+id
+10
+12
+
+# Both tables have an id, so a bare one has no defensible answer.
+statement error ambiguous
+SELECT id FROM customers c JOIN orders o ON c.id = o.customer_id
+
+# The table name reaches a table with no alias; the alias reaches one with.
+query
+SELECT customers.name FROM customers JOIN orders ON customers.id = orders.customer_id ORDER BY orders.id
+----
+name
+ada
+ada
+bob
+
+statement error no column "customers.name"
+SELECT customers.name FROM customers c JOIN orders o ON c.id = o.customer_id
+
+# Three tables, joined left to right.
+statement ok
+CREATE TABLE items (order_id INT, sku TEXT)
+
+statement ok
+INSERT INTO items VALUES (10, 'widget'), (10, 'gasket'), (12, 'flange')
+
+query
+SELECT c.name, i.sku FROM customers c JOIN orders o ON c.id = o.customer_id JOIN items i ON o.id = i.order_id ORDER BY c.name, i.sku
+----
+name|sku
+ada|gasket
+ada|widget
+bob|flange
+
+# A join condition that matches nothing gives no rows rather than a product.
+query
+SELECT o.id FROM customers c JOIN orders o ON c.id = o.id
+----
+id
+
+# A join whose condition involves NULL drops the row, since unknown does not
+# pass.
+statement ok
+CREATE TABLE maybe (id INT, ref INT)
+
+statement ok
+INSERT INTO maybe VALUES (1, NULL), (2, 1)
+
+query
+SELECT m.id FROM maybe m JOIN customers c ON m.ref = c.id
+----
+id
+2

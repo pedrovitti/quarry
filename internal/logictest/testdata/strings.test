@@ -1,0 +1,167 @@
+# The string and numeric functions beyond the basics.
+
+query
+SELECT ltrim('  a  ') || '|', rtrim('  a  ') || '|'
+----
+ltrim('  a  ') || '|'|rtrim('  a  ') || '|'
+a  ||  a|
+
+query
+SELECT reverse('abc'), reverse(''), reverse('a')
+----
+reverse('abc')|reverse('')|reverse('a')
+cba||a
+
+# reverse works on characters, so a multibyte string survives it.
+query
+SELECT reverse('héllo')
+----
+reverse('héllo')
+olléh
+
+query
+SELECT repeat('ab', 3), repeat('a', 0), repeat('', 5)
+----
+repeat('ab', 3)|repeat('a', 0)|repeat('', 5)
+ababab||
+
+statement error must not be negative
+SELECT repeat('a', -1)
+
+statement error more than
+SELECT repeat('abc', 1000000)
+
+query
+SELECT lpad('7', 3, '0'), rpad('7', 3, '0')
+----
+lpad('7', 3, '0')|rpad('7', 3, '0')
+007|700
+
+# The default fill is a space.
+query
+SELECT lpad('x', 3) || '|', rpad('x', 3) || '|'
+----
+lpad('x', 3) || '|'|rpad('x', 3) || '|'
+  x||x  |
+
+# A string already at or past the width is truncated.
+query
+SELECT lpad('abcdef', 3), rpad('abcdef', 3), lpad('abc', 3)
+----
+lpad('abcdef', 3)|rpad('abcdef', 3)|lpad('abc', 3)
+abc|abc|abc
+
+# A multi-character fill repeats and is cut to length.
+query
+SELECT lpad('x', 5, 'ab'), rpad('x', 5, 'ab')
+----
+lpad('x', 5, 'ab')|rpad('x', 5, 'ab')
+ababx|xabab
+
+statement error cannot pad with an empty string
+SELECT lpad('x', 5, '')
+
+statement error must not be negative
+SELECT lpad('x', -1)
+
+# instr is 1-based and returns 0 when the substring does not occur, so the
+# result is usable in arithmetic without a coalesce.
+query
+SELECT instr('hello', 'h'), instr('hello', 'llo'), instr('hello', 'z'), instr('hello', '')
+----
+instr('hello', 'h')|instr('hello', 'llo')|instr('hello', 'z')|instr('hello', '')
+1|3|0|1
+
+# Counted in characters, not bytes.
+query
+SELECT instr('héllo', 'llo')
+----
+instr('héllo', 'llo')
+3
+
+# concat skips NULLs; || propagates them. That is the whole difference.
+query
+SELECT concat('a', NULL, 'b'), 'a' || NULL
+----
+concat('a', NULL, 'b')|'a' || NULL
+ab|NULL
+
+query
+SELECT concat(NULL, NULL) || '|'
+----
+concat(NULL, NULL) || '|'
+|
+
+query
+SELECT startswith('hello', 'he'), startswith('hello', 'lo'), endswith('hello', 'lo')
+----
+startswith('hello', 'he')|startswith('hello', 'lo')|endswith('hello', 'lo')
+true|false|true
+
+query
+SELECT sign(-4), sign(0), sign(9), sign(-1.5), typeof(sign(-1.5))
+----
+sign(-4)|sign(0)|sign(9)|sign(-1.5)|typeof(sign(-1.5))
+-1|0|1|-1|INT
+
+query
+SELECT sqrt(9), sqrt(2), sqrt(0)
+----
+sqrt(9)|sqrt(2)|sqrt(0)
+3.0|1.4142135623730951|0.0
+
+statement error sqrt of a negative
+SELECT sqrt(-1)
+
+query
+SELECT power(2, 10), power(2, -1), power(9, 0.5)
+----
+power(2, 10)|power(2, -1)|power(9, 0.5)
+1024.0|0.5|3.0
+
+statement error overflows
+SELECT power(10, 400)
+
+# min and max ignore NULL rather than propagating it, so a NULL in the list
+# does not erase a real answer.
+query
+SELECT min(3, 1, 2), max(3, 1, 2), min(1, NULL), max(NULL, 5)
+----
+min(3, 1, 2)|max(3, 1, 2)|min(1, NULL)|max(NULL, 5)
+1|3|1|5
+
+query
+SELECT min(NULL, NULL)
+----
+min(NULL, NULL)
+NULL
+
+query
+SELECT min('b', 'a'), max('b', 'a')
+----
+min('b', 'a')|max('b', 'a')
+a|b
+
+statement error cannot compare
+SELECT min('a', 1)
+
+# nullif turns a sentinel into a NULL.
+query
+SELECT nullif(0, 0), nullif(5, 0), nullif('a', 'a'), nullif(NULL, 1)
+----
+nullif(0, 0)|nullif(5, 0)|nullif('a', 'a')|nullif(NULL, 1)
+NULL|5|NULL|NULL
+
+# Which makes this the usual guard against dividing by zero.
+statement ok
+CREATE TABLE q (total FLOAT, n INT)
+
+statement ok
+INSERT INTO q VALUES (10.0, 2), (10.0, 0)
+
+query
+SELECT coalesce(total / nullif(n, 0), 0.0) AS avg FROM q
+----
+avg
+5.0
+0.0
