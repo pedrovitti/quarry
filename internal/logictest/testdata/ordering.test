@@ -1,0 +1,162 @@
+# ORDER BY. Sorting has to be total - every pair of values needs an answer,
+# including pairs a WHERE clause would call unknown - so these pin down what
+# happens to NULLs and to values of different kinds, which is where a sort
+# and a predicate stop agreeing.
+
+statement ok
+CREATE TABLE t (id INT, n INT, f FLOAT, s TEXT, b BOOL)
+
+statement ok
+INSERT INTO t VALUES
+  (1, 3, 1.5, 'pear', TRUE),
+  (2, 1, 3.25, 'Apple', FALSE),
+  (3, NULL, NULL, NULL, NULL),
+  (4, 2, 0.5, 'apple', TRUE),
+  (5, NULL, 2.0, 'banana', FALSE)
+
+# NULLs sort first ascending.
+query
+SELECT id, n FROM t ORDER BY n, id
+----
+id|n
+3|NULL
+5|NULL
+2|1
+4|2
+1|3
+
+# And last descending: DESC reverses the whole order, NULLs included, rather
+# than reversing only the values.
+query
+SELECT id, n FROM t ORDER BY n DESC, id
+----
+id|n
+1|3
+4|2
+2|1
+3|NULL
+5|NULL
+
+# Text sorts by bytes, so upper case comes before lower case. 'Apple' is not
+# next to 'apple'.
+query
+SELECT s FROM t WHERE s IS NOT NULL ORDER BY s
+----
+s
+Apple
+apple
+banana
+pear
+
+# Booleans sort false before true.
+query
+SELECT id, b FROM t WHERE b IS NOT NULL ORDER BY b, id
+----
+id|b
+2|false
+5|false
+1|true
+4|true
+
+# A second key only breaks ties in the first, and each key carries its own
+# direction.
+query
+SELECT b, id FROM t WHERE b IS NOT NULL ORDER BY b DESC, id DESC
+----
+b|id
+true|4
+true|1
+false|5
+false|2
+
+query
+SELECT b, id FROM t WHERE b IS NOT NULL ORDER BY b DESC, id
+----
+b|id
+true|1
+true|4
+false|2
+false|5
+
+# Ordering by an expression rather than a column.
+query
+SELECT id, n FROM t WHERE n IS NOT NULL ORDER BY -n
+----
+id|n
+1|3
+4|2
+2|1
+
+query
+SELECT s FROM t WHERE s IS NOT NULL ORDER BY length(s), s
+----
+s
+pear
+Apple
+apple
+banana
+
+# Ordering by a column that is not selected, and by one that is selected under
+# a different name.
+query
+SELECT s FROM t WHERE id < 3 ORDER BY id DESC
+----
+s
+Apple
+pear
+
+query
+SELECT n AS howmany FROM t WHERE n IS NOT NULL ORDER BY howmany DESC
+----
+howmany
+3
+2
+1
+
+# Integers and floats order against each other numerically, since they compare
+# numerically.
+query
+SELECT f FROM t WHERE f IS NOT NULL ORDER BY f
+----
+f
+0.5
+1.5
+2.0
+3.25
+
+query
+SELECT id FROM t WHERE f > 1 ORDER BY f DESC
+----
+id
+2
+5
+1
+
+# ORDER BY on an empty result is still an empty result, not an error.
+query
+SELECT id FROM t WHERE id = 99 ORDER BY id
+----
+id
+
+# Sorting cooperates with paging: the LIMIT applies after the sort, so this is
+# the two smallest rather than two arbitrary rows put in order.
+query
+SELECT id, n FROM t ORDER BY n DESC, id LIMIT 2
+----
+id|n
+1|3
+4|2
+
+# And with DISTINCT, which runs before the sort.
+query
+SELECT DISTINCT b FROM t ORDER BY b
+----
+b
+NULL
+false
+true
+
+# An ORDER BY key has to resolve like any other column reference, and the
+# message lists what it could have been.
+statement error no column "nosuch"; available columns are t.id, t.n, t.f, t.s, t.b
+SELECT id FROM t ORDER BY nosuch
