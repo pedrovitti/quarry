@@ -1,0 +1,167 @@
+# LIMIT and OFFSET. The counts are constants evaluated once against no row,
+# which is what lets a LIMIT stop the scan under it instead of reading the
+# table and discarding most of it.
+
+statement ok
+CREATE TABLE t (id INT)
+
+statement ok
+INSERT INTO t VALUES (1), (2), (3), (4), (5)
+
+query
+SELECT id FROM t ORDER BY id LIMIT 2
+----
+id
+1
+2
+
+query
+SELECT id FROM t ORDER BY id OFFSET 2
+----
+id
+3
+4
+5
+
+query
+SELECT id FROM t ORDER BY id LIMIT 2 OFFSET 2
+----
+id
+3
+4
+
+# A limit of zero is a limit, not an absent one: no rows, but still the column
+# heading.
+query
+SELECT id FROM t LIMIT 0
+----
+id
+
+query
+SELECT id FROM t ORDER BY id OFFSET 0
+----
+id
+1
+2
+3
+4
+5
+
+# Asking for more than there is gives what there is, rather than failing.
+query
+SELECT id FROM t ORDER BY id LIMIT 99
+----
+id
+1
+2
+3
+4
+5
+
+# Skipping past the end gives nothing, and skipping exactly to the end also
+# gives nothing - the boundary either side of it is worth having.
+query
+SELECT id FROM t ORDER BY id OFFSET 5
+----
+id
+
+query
+SELECT id FROM t ORDER BY id OFFSET 99
+----
+id
+
+query
+SELECT id FROM t ORDER BY id OFFSET 4
+----
+id
+5
+
+# The limit counts rows kept after the offset, not rows visited.
+query
+SELECT id FROM t ORDER BY id LIMIT 99 OFFSET 3
+----
+id
+4
+5
+
+query
+SELECT id FROM t ORDER BY id LIMIT 1 OFFSET 4
+----
+id
+5
+
+query
+SELECT id FROM t ORDER BY id LIMIT 1 OFFSET 5
+----
+id
+
+# Paging applies after the WHERE and after the sort, so this is the two
+# largest odd ids rather than two arbitrary rows.
+query
+SELECT id FROM t WHERE id % 2 = 1 ORDER BY id DESC LIMIT 2
+----
+id
+5
+3
+
+# And after DISTINCT: three distinct values, of which this takes two.
+statement ok
+CREATE TABLE dup (a INT)
+
+statement ok
+INSERT INTO dup VALUES (1), (1), (2), (2), (3)
+
+query
+SELECT DISTINCT a FROM dup ORDER BY a LIMIT 2
+----
+a
+1
+2
+
+# On an empty table there is nothing to page through.
+statement ok
+CREATE TABLE empty (a INT)
+
+query
+SELECT a FROM empty LIMIT 3 OFFSET 1
+----
+a
+
+# The counts are expressions, so long as they are constant.
+query
+SELECT id FROM t ORDER BY id LIMIT 1 + 1
+----
+id
+1
+2
+
+query
+SELECT id FROM t ORDER BY id LIMIT abs(-2)
+----
+id
+1
+2
+
+# What they may not be.
+statement error LIMIT must not be negative
+SELECT id FROM t LIMIT -1
+
+statement error OFFSET must not be negative
+SELECT id FROM t OFFSET -1
+
+statement error LIMIT needs an integer, got FLOAT
+SELECT id FROM t LIMIT 1.5
+
+statement error LIMIT needs an integer, got TEXT
+SELECT id FROM t LIMIT 'two'
+
+statement error LIMIT must not be NULL
+SELECT id FROM t LIMIT NULL
+
+statement error OFFSET must not be NULL
+SELECT id FROM t OFFSET NULL
+
+# A count is evaluated against no row, so it cannot name a column even one
+# that exists.
+statement error no column "id"
+SELECT id FROM t LIMIT id
