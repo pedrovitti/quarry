@@ -1,0 +1,159 @@
+# DISTINCT. The rule that needs saying is that it groups NULLs together even
+# though NULL = NULL is unknown: DISTINCT compares rows for identity, not with
+# the equality operator, so it is one of the few places SQL treats NULL as a
+# value rather than as an absence.
+
+statement ok
+CREATE TABLE t (a INT, b TEXT)
+
+statement ok
+INSERT INTO t VALUES
+  (1, 'x'),
+  (1, 'x'),
+  (1, 'y'),
+  (2, 'x'),
+  (NULL, 'x'),
+  (NULL, 'x'),
+  (NULL, NULL),
+  (NULL, NULL)
+
+# Repeated NULLs collapse to one, the same as repeated values.
+query
+SELECT DISTINCT a FROM t ORDER BY a
+----
+a
+NULL
+1
+2
+
+# Over several columns it is the whole row that has to repeat, so (1, 'x') and
+# (1, 'y') both survive and the two all-NULL rows become one.
+query
+SELECT DISTINCT a, b FROM t ORDER BY a, b
+----
+a|b
+NULL|NULL
+NULL|x
+1|x
+1|y
+2|x
+
+# A row that is NULL in one column is not the same as one that is NULL in the
+# other, which is the difference between grouping NULLs and ignoring them.
+statement ok
+CREATE TABLE pair (a INT, b INT)
+
+statement ok
+INSERT INTO pair VALUES (NULL, 1), (1, NULL), (NULL, 1)
+
+query
+SELECT DISTINCT a, b FROM pair ORDER BY a, b
+----
+a|b
+NULL|1
+1|NULL
+
+# DISTINCT applies to what was selected, not to the rows underneath: the four
+# rows with a = 1 or 2 project onto two values.
+query
+SELECT DISTINCT a FROM t WHERE a IS NOT NULL ORDER BY a
+----
+a
+1
+2
+
+statement ok
+CREATE TABLE signs (n INT)
+
+statement ok
+INSERT INTO signs VALUES (-1), (1), (-2), (2)
+
+# DISTINCT applies to the computed value, so rows that differ underneath can
+# still collapse.
+query
+SELECT DISTINCT abs(n) AS m FROM signs ORDER BY m
+----
+m
+1
+2
+
+# With DISTINCT, an ORDER BY key has to be something that was selected. The
+# rows the sort would need are gone by the time it runs, so naming the
+# expression again is not enough - it has to be named by its output.
+statement error ORDER BY abs(n) must appear in the select list when DISTINCT is used
+SELECT DISTINCT abs(n) FROM signs ORDER BY abs(n)
+
+statement error ORDER BY n must appear in the select list when DISTINCT is used
+SELECT DISTINCT abs(n) AS m FROM signs ORDER BY n
+
+# An INT and a FLOAT of the same value are different rows: DISTINCT is
+# identity, and the two are stored differently even though 1 = 1.0 is true.
+statement ok
+CREATE TABLE mixed (a FLOAT)
+
+statement ok
+INSERT INTO mixed VALUES (1), (1.0), (1.5)
+
+query
+SELECT DISTINCT a FROM mixed ORDER BY a
+----
+a
+1.0
+1.5
+
+# Nothing to remove leaves the rows as they were, in the order they arrived.
+query
+SELECT DISTINCT b FROM t WHERE a = 1 ORDER BY b
+----
+b
+x
+y
+
+# DISTINCT over an empty result is an empty result.
+query
+SELECT DISTINCT a FROM t WHERE a = 99
+----
+a
+
+# It runs before ORDER BY and before paging, so this is the second of the
+# distinct values rather than the second row.
+query
+SELECT DISTINCT a FROM t ORDER BY a LIMIT 1 OFFSET 1
+----
+a
+1
+
+# And after the join, so duplicates the join created are removed too.
+statement ok
+CREATE TABLE l (id INT)
+
+statement ok
+CREATE TABLE r (id INT, tag TEXT)
+
+statement ok
+INSERT INTO l VALUES (1), (2)
+
+statement ok
+INSERT INTO r VALUES (1, 'p'), (1, 'q'), (2, 'p')
+
+query
+SELECT l.id FROM l JOIN r ON l.id = r.id ORDER BY l.id
+----
+id
+1
+1
+2
+
+query
+SELECT DISTINCT l.id FROM l JOIN r ON l.id = r.id ORDER BY l.id
+----
+id
+1
+2
+
+query
+SELECT DISTINCT tag FROM l JOIN r ON l.id = r.id ORDER BY tag
+----
+tag
+p
+q
