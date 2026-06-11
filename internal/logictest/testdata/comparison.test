@@ -1,0 +1,138 @@
+# Comparison across kinds. An integer and a float compare numerically; every
+# other mixed pair does not compare at all, because SQL will not silently read
+# '10' as a number. The planner rejects those before anything runs, which is
+# why they are errors rather than empty results.
+
+statement ok
+CREATE TABLE t (n INT, f FLOAT, s TEXT, b BOOL)
+
+statement ok
+INSERT INTO t VALUES
+  (1, 1.0, '1', TRUE),
+  (2, 2.5, '10', FALSE),
+  (10, 10.0, '2', TRUE)
+
+# Integers and floats compare as numbers, in either position.
+query
+SELECT 1 = 1.0, 1 < 1.5, 2.5 > 2, 1.0 <> 1
+----
+1 = 1.0|1 < 1.5|2.5 > 2|1.0 <> 1
+true|true|true|false
+
+query
+SELECT n FROM t WHERE n = f ORDER BY n
+----
+n
+1
+10
+
+query
+SELECT n FROM t WHERE f > n ORDER BY n
+----
+n
+2
+
+# Text compares by bytes, so '10' sorts before '2' - the opposite of the
+# numbers they look like.
+query
+SELECT '10' < '2', 10 < 2
+----
+'10' < '2'|10 < 2
+true|false
+
+query
+SELECT s FROM t ORDER BY s
+----
+s
+1
+10
+2
+
+query
+SELECT n FROM t ORDER BY n
+----
+n
+1
+2
+10
+
+# Booleans compare with false before true.
+query
+SELECT FALSE < TRUE, TRUE > FALSE, TRUE = TRUE, TRUE <> FALSE
+----
+FALSE < TRUE|TRUE > FALSE|TRUE = TRUE|TRUE <> FALSE
+true|true|true|true
+
+query
+SELECT n FROM t WHERE b ORDER BY n
+----
+n
+1
+10
+
+# Text and numbers do not compare. This is caught while planning, so it fails
+# even where no row could reach the comparison.
+statement error cannot compare TEXT with INT
+SELECT * FROM t WHERE s = 1
+
+statement error cannot compare INT with TEXT
+SELECT * FROM t WHERE n = '1'
+
+statement error cannot compare TEXT with INT
+SELECT * FROM t WHERE s < n
+
+statement error cannot compare
+SELECT * FROM t WHERE n = 1 AND s = 2
+
+statement error cannot compare
+SELECT * FROM t WHERE s > 1 AND FALSE
+
+# Nor do booleans and numbers, or booleans and text.
+statement error cannot compare BOOL with INT
+SELECT * FROM t WHERE b = 1
+
+statement error cannot compare BOOL with TEXT
+SELECT * FROM t WHERE b = 'true'
+
+# A literal comparison of unlike kinds is rejected on the same grounds, with
+# no table involved at all.
+statement error cannot compare TEXT with INT
+SELECT '1' = 1
+
+statement error cannot compare BOOL with INT
+SELECT TRUE = 1
+
+# NULL compares with anything and answers unknown, so these are allowed
+# through and simply produce NULL.
+query
+SELECT NULL = 1, NULL = 'a', NULL = TRUE, NULL = NULL
+----
+NULL = 1|NULL = 'a'|NULL = TRUE|NULL = NULL
+NULL|NULL|NULL|NULL
+
+# Comparison is what ordering is built from, so the same kinds that compare
+# also sort against each other.
+query
+SELECT n, f FROM t WHERE n <= 2 ORDER BY f DESC
+----
+n|f
+2|2.5
+1|1.0
+
+# Chained comparison is not a thing: this is (1 < 2) < 3, which compares a
+# boolean with a number.
+statement error cannot compare BOOL with INT
+SELECT 1 < 2 < 3
+
+# Equality on a computed value works the same as on a stored one.
+query
+SELECT n FROM t WHERE n * 2 = 20
+----
+n
+10
+
+query
+SELECT n FROM t WHERE length(s) = 2
+----
+n
+2
