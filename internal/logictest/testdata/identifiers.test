@@ -1,0 +1,165 @@
+# Identifiers and case. Keywords and function names fold to upper case before
+# they are looked up; table and column names do not fold at all. That split is
+# worth pinning, because the two halves look the same in a statement.
+
+statement ok
+CREATE TABLE t (a INT, b TEXT)
+
+statement ok
+INSERT INTO t VALUES (1, 'x')
+
+# Keywords are matched case insensitively, in any mixture.
+query
+select a from t where a = 1
+----
+a
+1
+
+query
+SeLeCt a FrOm t WhErE a = 1
+----
+a
+1
+
+# So are function names and the type names in a CREATE TABLE, neither of which
+# are reserved words.
+query
+SELECT UPPER('a'), upper('a'), Upper('a')
+----
+UPPER('a')|upper('a')|Upper('a')
+A|A|A
+
+statement ok
+CREATE TABLE cased (a integer, b Text, c BOOLEAN)
+
+query
+SELECT typeof(a), typeof(b), typeof(c) FROM cased
+----
+typeof(a)|typeof(b)|typeof(c)
+
+# Table and column names keep the case they were written in and are matched
+# exactly, so a table created as T is not reachable as t.
+statement ok
+CREATE TABLE Cap (Col INT)
+
+statement ok
+INSERT INTO Cap VALUES (1)
+
+query
+SELECT Col FROM Cap
+----
+Col
+1
+
+statement error table "cap" does not exist
+SELECT * FROM cap
+
+statement error no column "col"
+SELECT col FROM Cap
+
+# Which means a lower case and an upper case name are two different tables.
+statement ok
+CREATE TABLE cap (other INT)
+
+statement ok
+INSERT INTO cap VALUES (2)
+
+query
+SELECT other FROM cap
+----
+other
+2
+
+query
+SELECT Col FROM Cap
+----
+Col
+1
+
+# Double quotes make any string an identifier, including one that is a
+# reserved word or has a space in it.
+statement ok
+CREATE TABLE "select" ("order by" TEXT, "from" INT)
+
+statement ok
+INSERT INTO "select" VALUES ('x', 1)
+
+query
+SELECT "order by", "from" FROM "select"
+----
+order by|from
+x|1
+
+# A doubled quote inside a quoted identifier is one quote.
+statement ok
+CREATE TABLE "a""b" ("c""d" INT)
+
+statement ok
+INSERT INTO "a""b" VALUES (1)
+
+query
+SELECT "c""d" FROM "a""b"
+----
+c"d
+1
+
+# Quoting does not create a different name: a quoted identifier and the bare
+# spelling of the same characters are the same column.
+query
+SELECT "a" FROM t
+----
+a
+1
+
+query
+SELECT a FROM "t"
+----
+a
+1
+
+# But quoting does preserve case, so it cannot reach a name written
+# differently.
+statement error table "T" does not exist
+SELECT * FROM "T"
+
+# An unquoted reserved word is not an identifier, and the parser says so
+# rather than treating it as one.
+statement error syntax error
+CREATE TABLE select (a INT)
+
+statement error syntax error
+SELECT * FROM t AS from
+
+# Identifiers may hold digits and underscores after the first character.
+statement ok
+CREATE TABLE _t2 (col_1 INT, x9 INT)
+
+statement ok
+INSERT INTO _t2 VALUES (1, 2)
+
+query
+SELECT col_1, x9 FROM _t2
+----
+col_1|x9
+1|2
+
+# A qualifier is matched the same way as the name it qualifies.
+query
+SELECT t.a FROM t
+----
+a
+1
+
+statement error no column "T.a"
+SELECT T.a FROM t
+
+# An alias replaces the table name for the rest of the statement, so the
+# original name no longer reaches it.
+query
+SELECT x.a FROM t AS x
+----
+a
+1
+
+statement error no column "t.a"
+SELECT t.a FROM t AS x
