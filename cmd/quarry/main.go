@@ -9,6 +9,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/pedrovitti/quarry/internal/cli"
@@ -25,14 +26,17 @@ func main() {
 	}
 	flag.Parse()
 
-	if err := run(*command, *load, *echo, flag.Args()); err != nil {
+	if err := run(os.Stdout, os.Stderr, *command, *load, *echo, flag.Args()); err != nil {
 		fmt.Fprintf(os.Stderr, "quarry: %s\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(command, load string, echo bool, args []string) error {
-	shell := cli.New(os.Stdout, os.Stderr)
+// run is main without the process: it takes the streams to write to and
+// returns the error main would exit on, so the argument handling can be
+// exercised without a terminal.
+func run(out, errOut io.Writer, command, load string, echo bool, args []string) error {
+	shell := cli.New(out, errOut)
 	shell.SetEcho(echo)
 
 	if load != "" {
