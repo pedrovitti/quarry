@@ -1,0 +1,151 @@
+# The shapes a join can take: a table joined to itself, a condition that
+# matches many rows on both sides, and one that matches everything. The
+# existing join file covers what a join means; this one covers how many rows
+# come out of it.
+
+statement ok
+CREATE TABLE emp (id INT, name TEXT, manager INT)
+
+statement ok
+INSERT INTO emp VALUES
+  (1, 'ada', NULL),
+  (2, 'bob', 1),
+  (3, 'cy', 1),
+  (4, 'dee', 2)
+
+# A table joined to itself. The aliases are what make the two sides separate
+# names, so this is the one case where an alias is not optional.
+query
+SELECT e.name, m.name FROM emp e JOIN emp m ON e.manager = m.id ORDER BY e.name
+----
+name|name
+bob|ada
+cy|ada
+dee|bob
+
+# ada has no manager, and NULL does not match, so she is not in the result -
+# an inner join has no way to keep her.
+query
+SELECT e.name FROM emp e JOIN emp m ON e.manager = m.id WHERE e.name = 'ada'
+----
+name
+
+# Without aliases the same table twice has no way to be addressed, and the
+# ambiguity is reported rather than resolved by position.
+statement error ambiguous
+SELECT id FROM emp JOIN emp ON TRUE
+
+# The join direction is the query's, not the data's: reading it the other way
+# round gives each manager once per report.
+query
+SELECT m.name, e.name FROM emp m JOIN emp e ON e.manager = m.id ORDER BY m.name, e.name
+----
+name|name
+ada|bob
+ada|cy
+bob|dee
+
+# A condition matching several rows on both sides multiplies them. Two lefts
+# and three rights sharing a key give six rows, not three.
+statement ok
+CREATE TABLE l (k INT, tag TEXT)
+
+statement ok
+CREATE TABLE r (k INT, tag TEXT)
+
+statement ok
+INSERT INTO l VALUES (1, 'a'), (1, 'b'), (2, 'c')
+
+statement ok
+INSERT INTO r VALUES (1, 'x'), (1, 'y'), (1, 'z'), (3, 'w')
+
+query
+SELECT l.tag, r.tag FROM l JOIN r ON l.k = r.k ORDER BY l.tag, r.tag
+----
+tag|tag
+a|x
+a|y
+a|z
+b|x
+b|y
+b|z
+
+# The key that matches nothing on the other side contributes nothing, from
+# either direction.
+query
+SELECT l.tag FROM l JOIN r ON l.k = r.k WHERE l.tag = 'c'
+----
+tag
+
+query
+SELECT r.tag FROM l JOIN r ON l.k = r.k WHERE r.tag = 'w'
+----
+tag
+
+# A condition that is always true is a cross product: every left row against
+# every right row.
+query
+SELECT l.tag, r.tag FROM l JOIN r ON TRUE ORDER BY l.tag, r.tag
+----
+tag|tag
+a|w
+a|x
+a|y
+a|z
+b|w
+b|x
+b|y
+b|z
+c|w
+c|x
+c|y
+c|z
+
+# And one that is always false gives nothing, however many rows are on each
+# side.
+query
+SELECT l.tag FROM l JOIN r ON FALSE
+----
+tag
+
+# A join against an empty table is empty whatever the condition.
+statement ok
+CREATE TABLE nothing (k INT)
+
+query
+SELECT l.tag FROM l JOIN nothing n ON TRUE
+----
+tag
+
+query
+SELECT l.tag FROM nothing n JOIN l ON TRUE
+----
+tag
+
+# The condition may compute rather than compare columns directly.
+query
+SELECT l.tag, r.tag FROM l JOIN r ON l.k + 2 = r.k ORDER BY l.tag
+----
+tag|tag
+a|w
+b|w
+
+query
+SELECT l.tag, r.tag FROM l JOIN r ON upper(l.tag) = upper(r.tag)
+----
+tag|tag
+
+# A chain of three joins over the same two tables, which is where a left-nested
+# plan either holds up or does not.
+query
+SELECT l.tag, r.tag, e.name
+FROM l JOIN r ON l.k = r.k JOIN emp e ON e.id = l.k
+ORDER BY l.tag, r.tag
+----
+tag|tag|name
+a|x|ada
+a|y|ada
+a|z|ada
+b|x|ada
+b|y|ada
+b|z|ada
