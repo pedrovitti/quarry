@@ -1,10 +1,10 @@
 // Package parse turns SQL text into an ast tree.
 //
 // The parser is recursive descent with precedence climbing for expressions. It
-// carries one token of lookahead, which is enough for every construct quarry
-// accepts: the only genuinely ambiguous point is an identifier in a select
-// list, where the token after it decides between a qualified name, a function
-// call and an implicit alias.
+// needs no lookahead buffer: the only genuinely ambiguous point is an
+// identifier in a select list, where the token after it decides between a
+// qualified name, a function call and an implicit alias, and that one is
+// resolved by consuming the identifier and looking at the cursor.
 package parse
 
 import (
@@ -16,9 +16,8 @@ import (
 type Parser struct {
 	lexer *lex.Lexer
 
-	tok    lex.Token  // token under the cursor
-	ahead  *lex.Token // lookahead, filled on demand by peek
-	failed error      // first error seen; the parser stops advancing after it
+	tok    lex.Token // token under the cursor
+	failed error     // first error seen; the parser stops advancing after it
 
 	// starOK is set while parsing a select item, the only place * and t.* are
 	// expressions. Everywhere else * is multiplication and a bare one is an
@@ -104,11 +103,6 @@ func (p *Parser) Statement() (ast.Stmt, error) {
 // next advances the cursor by one token. A lexical error is recorded and the
 // cursor is parked on EOF, so callers can keep using p.tok without checking.
 func (p *Parser) next() {
-	if p.ahead != nil {
-		p.tok = *p.ahead
-		p.ahead = nil
-		return
-	}
 	tok, err := p.lexer.Next()
 	if err != nil {
 		if p.failed == nil {
@@ -118,21 +112,6 @@ func (p *Parser) next() {
 		return
 	}
 	p.tok = tok
-}
-
-// peek returns the token after the cursor without consuming it.
-func (p *Parser) peek() lex.Token {
-	if p.ahead == nil {
-		tok, err := p.lexer.Next()
-		if err != nil {
-			if p.failed == nil {
-				p.failed = err
-			}
-			tok = lex.Token{Kind: lex.EOF, Pos: p.tok.Pos}
-		}
-		p.ahead = &tok
-	}
-	return *p.ahead
 }
 
 // at reports whether the cursor is on a token of the given kind.
