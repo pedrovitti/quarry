@@ -38,11 +38,11 @@ func Parse(src string) (ast.Stmt, error) {
 	p := New(src)
 	stmt, err := p.Statement()
 	if err != nil {
-		return nil, err
+		return nil, p.reason(err)
 	}
 	p.accept(lex.Semicolon)
 	if !p.at(lex.EOF) {
-		return nil, unexpected(p.tok, "end of statement")
+		return nil, p.reason(unexpected(p.tok, "end of statement"))
 	}
 	return stmt, p.failed
 }
@@ -55,12 +55,12 @@ func ParseAll(src string) ([]ast.Stmt, error) {
 	for !p.at(lex.EOF) {
 		stmt, err := p.Statement()
 		if err != nil {
-			return nil, err
+			return nil, p.reason(err)
 		}
 		stmts = append(stmts, stmt)
 
 		if !p.accept(lex.Semicolon) && !p.at(lex.EOF) {
-			return nil, unexpected(p.tok, "a semicolon between statements")
+			return nil, p.reason(unexpected(p.tok, "a semicolon between statements"))
 		}
 	}
 	return stmts, p.failed
@@ -73,12 +73,23 @@ func ParseExpr(src string) (ast.Expr, error) {
 	p := New(src)
 	expr, err := p.parseExpr()
 	if err != nil {
-		return nil, err
+		return nil, p.reason(err)
 	}
 	if !p.at(lex.EOF) {
-		return nil, unexpected(p.tok, "end of expression")
+		return nil, p.reason(unexpected(p.tok, "end of expression"))
 	}
 	return expr, p.failed
+}
+
+// reason prefers the lexical error, where there was one, over whatever the
+// parser made of the tokens after it. A scan that fails parks the cursor on
+// EOF, so the parser's own complaint is about input that ended - true, but
+// less use than "unterminated string".
+func (p *Parser) reason(err error) error {
+	if p.failed != nil {
+		return p.failed
+	}
+	return err
 }
 
 // Statement parses the next statement, dispatching on its leading keyword.
