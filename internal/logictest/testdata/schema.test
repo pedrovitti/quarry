@@ -1,0 +1,181 @@
+# Schemas: what a column's declared type does to the values put in it, and
+# what column order means. The DML file covers the statements; this covers the
+# shape they operate on.
+
+# Column order is part of the schema. It is what VALUES without a column list
+# means and what * expands to, so the two have to agree.
+statement ok
+CREATE TABLE ordered (c INT, a INT, b INT)
+
+statement ok
+INSERT INTO ordered VALUES (1, 2, 3)
+
+query
+SELECT * FROM ordered
+----
+c|a|b
+1|2|3
+
+query
+SELECT a, b, c FROM ordered
+----
+a|b|c
+2|3|1
+
+# A column list on the INSERT overrides the order without changing the table's.
+statement ok
+INSERT INTO ordered (b, c, a) VALUES (30, 10, 20)
+
+query
+SELECT * FROM ordered WHERE c = 10
+----
+c|a|b
+10|20|30
+
+# Columns not named in the list are NULL rather than absent or zero.
+statement ok
+INSERT INTO ordered (a) VALUES (99)
+
+query
+SELECT * FROM ordered WHERE a = 99
+----
+c|a|b
+NULL|99|NULL
+
+# An INT stored in a FLOAT column widens on the way in, so what comes back is
+# a float. Storing is not the same as comparing: the value changes kind here.
+statement ok
+CREATE TABLE widths (i INT, b BIGINT, f FLOAT, t TEXT, o BOOL)
+
+statement ok
+INSERT INTO widths VALUES (1, 1, 1, 'one', TRUE)
+
+query
+SELECT typeof(i), typeof(b), typeof(f), typeof(t), typeof(o) FROM widths
+----
+typeof(i)|typeof(b)|typeof(f)|typeof(t)|typeof(o)
+INT|INT|FLOAT|TEXT|BOOL
+
+query
+SELECT f FROM widths
+----
+f
+1.0
+
+# The widening goes one way only. A float in an INT column would lose the
+# fractional part, so it is refused rather than truncated.
+statement error cannot store FLOAT value in INT
+INSERT INTO widths VALUES (1.5, 1, 1.0, 'x', TRUE)
+
+statement error cannot store TEXT value in INT
+INSERT INTO widths VALUES ('1', 1, 1.0, 'x', TRUE)
+
+statement error cannot store BOOL value in INT
+INSERT INTO widths VALUES (TRUE, 1, 1.0, 'x', TRUE)
+
+statement error cannot store INT value in TEXT
+INSERT INTO widths VALUES (1, 1, 1.0, 2, TRUE)
+
+statement error cannot store INT value in BOOL
+INSERT INTO widths VALUES (1, 1, 1.0, 'x', 1)
+
+# BIGINT and INT are the same runtime kind, so a value crosses between them.
+statement ok
+INSERT INTO widths (i, b) VALUES (2147483648, 2147483648)
+
+query
+SELECT i, b FROM widths WHERE i > 1000
+----
+i|b
+2147483648|2147483648
+
+# NULL goes into any column that allows it, whatever the type.
+statement ok
+INSERT INTO widths VALUES (NULL, NULL, NULL, NULL, NULL)
+
+query
+SELECT typeof(i), typeof(f), typeof(o) FROM widths WHERE i IS NULL
+----
+typeof(i)|typeof(f)|typeof(o)
+NULL|NULL|NULL
+
+# NOT NULL is checked on the way in and on the way through: an UPDATE that
+# would introduce one is refused as firmly as an INSERT.
+statement ok
+CREATE TABLE strict (id INT NOT NULL, note TEXT)
+
+statement ok
+INSERT INTO strict VALUES (1, 'a')
+
+statement error must not be NULL
+INSERT INTO strict VALUES (NULL, 'b')
+
+statement error must not be NULL
+INSERT INTO strict (note) VALUES ('b')
+
+statement error must not be NULL
+UPDATE strict SET id = NULL
+
+# The column beside it still takes NULL, so the constraint is per column and
+# not per row.
+statement ok
+UPDATE strict SET note = NULL
+
+query
+SELECT id, note FROM strict
+----
+id|note
+1|NULL
+
+# A failed statement leaves the table as it was, so the row above survives an
+# insert that violated the constraint half way through.
+statement error must not be NULL
+INSERT INTO strict VALUES (2, 'b'), (NULL, 'c')
+
+query
+SELECT id FROM strict ORDER BY id
+----
+id
+1
+
+# Dropping a table takes its schema with it: the name can come back with a
+# different shape and nothing remembers the old one.
+statement ok
+CREATE TABLE recycled (a INT)
+
+statement ok
+INSERT INTO recycled VALUES (1)
+
+statement ok
+DROP TABLE recycled
+
+statement ok
+CREATE TABLE recycled (b TEXT, c TEXT)
+
+query
+SELECT * FROM recycled
+----
+b|c
+
+statement error no column "a"
+SELECT a FROM recycled
+
+# A table needs at least one column, and no two of them may share a name.
+statement error expected a column name
+CREATE TABLE empty ()
+
+statement error is defined twice
+CREATE TABLE twice (a INT, a TEXT)
+
+# Names differing only in case are different columns, since nothing is folded.
+statement ok
+CREATE TABLE cased (a INT, A INT)
+
+statement ok
+INSERT INTO cased VALUES (1, 2)
+
+query
+SELECT a, A FROM cased
+----
+a|A
+1|2
