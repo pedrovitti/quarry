@@ -6,3 +6,4 @@ report.xml
 !**/testdata/*.test
 /tmp/
 .DS_Store
+coverage.out

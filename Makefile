@@ -8,7 +8,7 @@ DOCKER = docker run --rm \
 	-w /app \
 	$(IMAGE)
 
-.PHONY: image test testv build fmt vet lint shell junit clean
+.PHONY: image test testv cover build fmt vet lint shell junit clean
 
 image:
 	docker build -t $(IMAGE) -f Dockerfile .
@@ -18,6 +18,12 @@ test:
 
 testv:
 	$(DOCKER) go test -v ./...
+
+# Per-package coverage, then the uncovered lines. The second half is the
+# useful one: a percentage says how much, this says which.
+cover:
+	$(DOCKER) go test -coverprofile=/app/coverage.out ./...
+	$(DOCKER) go tool cover -func=/app/coverage.out | grep -v "100.0%"
 
 # Mirrors how the grader runs: no network, JUnit XML out.
 junit:
@@ -39,4 +45,4 @@ shell:
 
 clean:
 	docker volume rm -f $(CACHE)
-	rm -f report.xml
+	rm -f report.xml coverage.out
