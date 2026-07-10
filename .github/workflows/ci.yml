@@ -1,0 +1,85 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to the same branch supersedes the run in flight.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The fast path: a native toolchain, no container. This is the job that
+  # tells you what broke.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          # Read the version from go.mod so there is one place to bump it.
+          go-version-file: go.mod
+          check-latest: false
+
+      # GOTOOLCHAIN=local for the same reason the Dockerfile sets it: nothing
+      # here should quietly download a different toolchain.
+      - name: Check formatting
+        env:
+          GOTOOLCHAIN: local
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            gofmt -d .
+            exit 1
+          fi
+
+      - name: Vet
+        env:
+          GOTOOLCHAIN: local
+        run: go vet ./...
+
+      - name: Build
+        env:
+          GOTOOLCHAIN: local
+        run: go build ./...
+
+      - name: Test
+        env:
+          GOTOOLCHAIN: local
+        run: go test -coverprofile=coverage.out ./...
+
+      - name: Coverage
+        env:
+          GOTOOLCHAIN: local
+        run: go tool cover -func=coverage.out | tail -1
+
+  # The container path is how the project is meant to be run and how the
+  # grader runs it, so it is worth exercising even though the job above has
+  # already run the same tests. This one catches the Dockerfile going stale.
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the image
+        run: make image
+
+      # Mirrors the grader: no network, JUnit XML out.
+      - name: Test with no network
+        run: make junit
+
+      - name: Upload the JUnit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-report
+          path: report.xml
+          if-no-files-found: error
