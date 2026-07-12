@@ -5,5 +5,9 @@ report.xml
 *.test
 !**/testdata/*.test
 /tmp/
-.DS_Store
 coverage.out
+
+# Editor and tool state. None of it says anything about the project.
+.DS_Store
+.idea/
+.claude/
