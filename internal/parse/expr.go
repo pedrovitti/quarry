@@ -2,6 +2,7 @@ package parse
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/pedrovitti/quarry/internal/ast"
 	"github.com/pedrovitti/quarry/internal/lex"
@@ -188,7 +189,13 @@ func (p *Parser) parseCallArgs(name lex.Token) (ast.Expr, error) {
 		return call, nil
 	}
 	for {
+		// count(*) is a call over whole rows rather than over a value, so an
+		// argument list is the one place outside a select item where a star is
+		// an expression at all.
+		restore := p.starOK
+		p.starOK = true
 		arg, err := p.parseExpr()
+		p.starOK = restore
 		if err != nil {
 			return nil, err
 		}
@@ -200,5 +207,30 @@ func (p *Parser) parseCallArgs(name lex.Token) (ast.Expr, error) {
 	if _, err := p.expect(lex.RParen); err != nil {
 		return nil, unexpected(p.tok, "a comma or a closing parenthesis")
 	}
+	if err := checkCallStars(call); err != nil {
+		return nil, err
+	}
 	return call, nil
+}
+
+// checkCallStars holds a star to count(*): unqualified, alone, and only there.
+func checkCallStars(call *ast.FuncCall) error {
+	for _, arg := range call.Args {
+		star, ok := arg.(*ast.Star)
+		if !ok {
+			for _, node := range ast.Inspect(arg, isStar) {
+				return errorf(node.Pos(), "* cannot appear inside an expression")
+			}
+			continue
+		}
+		if star.Table != "" || len(call.Args) != 1 || !strings.EqualFold(call.Name, "count") {
+			return errorf(star.Pos(), "* is only allowed in count(*)")
+		}
+	}
+	return nil
+}
+
+func isStar(n ast.Node) bool {
+	_, ok := n.(*ast.Star)
+	return ok
 }
