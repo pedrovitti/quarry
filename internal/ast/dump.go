@@ -131,6 +131,16 @@ func dumpSelect(s *Select) string {
 	if s.Where != nil {
 		parts = append(parts, list("where", Dump(s.Where)))
 	}
+	if len(s.GroupBy) > 0 {
+		group := []string{"group-by"}
+		for _, expr := range s.GroupBy {
+			group = append(group, Dump(expr))
+		}
+		parts = append(parts, list(group...))
+	}
+	if s.Having != nil {
+		parts = append(parts, list("having", Dump(s.Having)))
+	}
 	if len(s.OrderBy) > 0 {
 		order := []string{"order"}
 		for _, item := range s.OrderBy {

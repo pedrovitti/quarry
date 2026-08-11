@@ -124,6 +124,19 @@ func (s *Select) String() string {
 		sb.WriteString(" WHERE ")
 		sb.WriteString(s.Where.String())
 	}
+	if len(s.GroupBy) > 0 {
+		sb.WriteString(" GROUP BY ")
+		for i, expr := range s.GroupBy {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(expr.String())
+		}
+	}
+	if s.Having != nil {
+		sb.WriteString(" HAVING ")
+		sb.WriteString(s.Having.String())
+	}
 	if len(s.OrderBy) > 0 {
 		sb.WriteString(" ORDER BY ")
 		for i, item := range s.OrderBy {
