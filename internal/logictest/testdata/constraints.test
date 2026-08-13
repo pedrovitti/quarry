@@ -1,0 +1,337 @@
+# What a table is allowed to hold. NOT NULL was the only thing a schema could
+# say about its rows; this covers the keys, the uniqueness and the conditions
+# beside it. Defaults have their own file.
+
+statement ok
+CREATE TABLE users (id INT PRIMARY KEY, email TEXT UNIQUE, age INT CHECK (age >= 0))
+
+statement ok
+INSERT INTO users VALUES (1, 'ann@example.com', 31)
+
+statement ok
+INSERT INTO users VALUES (2, 'bo@example.com', 0)
+
+# A key that is already there is refused, and the message says which value hit
+# which constraint.
+statement error duplicate value (1) for PRIMARY KEY (id)
+INSERT INTO users VALUES (1, 'cyd@example.com', 20)
+
+statement error duplicate value ('ann@example.com') for UNIQUE (email)
+INSERT INTO users VALUES (3, 'ann@example.com', 44)
+
+# Neither of those rows landed.
+query
+SELECT id, email FROM users
+----
+id|email
+1|ann@example.com
+2|bo@example.com
+
+# A primary key column is NOT NULL whether or not it was written that way.
+statement error column "id" must not be NULL
+INSERT INTO users VALUES (NULL, 'dee@example.com', 12)
+
+# UNIQUE is not NOT NULL. Two NULLs are not equal, so they do not collide, and
+# a column can hold as many of them as it likes.
+statement ok
+INSERT INTO users VALUES (3, NULL, 5)
+
+statement ok
+INSERT INTO users VALUES (4, NULL, 6)
+
+query
+SELECT id, email FROM users WHERE email IS NULL
+----
+id|email
+3|NULL
+4|NULL
+
+# A condition rejects a row only when it is definitely false.
+statement error CHECK constraint on "users" failed
+INSERT INTO users VALUES (5, 'eve@example.com', -1)
+
+# Unknown is not false, so a NULL age passes a check that WHERE would have
+# dropped the row on. This is the one place the two read alike and behave
+# oppositely.
+statement ok
+INSERT INTO users VALUES (5, 'eve@example.com', NULL)
+
+query
+SELECT id, age FROM users WHERE age >= 0
+----
+id|age
+1|31
+2|0
+3|5
+4|6
+
+query
+SELECT id, age FROM users WHERE id = 5
+----
+id|age
+5|NULL
+
+# A statement checks its own rows against each other, so these two collide
+# without either being in the table yet.
+statement error duplicate value (7) for PRIMARY KEY (id)
+INSERT INTO users VALUES (6, 'fay@example.com', 1), (7, 'gus@example.com', 2), (7, 'hal@example.com', 3)
+
+# And nothing from it landed, not even the rows before the one that failed.
+query
+SELECT id FROM users WHERE id > 5
+----
+id
+
+statement error duplicate value ('ivy@example.com') for UNIQUE (email)
+INSERT INTO users VALUES (8, 'ivy@example.com', 1), (9, 'ivy@example.com', 2)
+
+query
+SELECT id FROM users WHERE id > 5
+----
+id
+
+# An update compares a changed row against the others and not against itself,
+# so writing a key back over itself is not a duplicate of it.
+statement ok
+UPDATE users SET id = id WHERE id = 2
+
+statement ok
+UPDATE users SET age = age + 1 WHERE id = 1
+
+query
+SELECT id, age FROM users WHERE id = 1
+----
+id|age
+1|32
+
+statement error duplicate value (1) for PRIMARY KEY (id)
+UPDATE users SET id = 1 WHERE id = 2
+
+# Two rows moved onto one key collide with each other, the same way a
+# multi-row insert does.
+statement error duplicate value (9) for PRIMARY KEY (id)
+UPDATE users SET id = 9 WHERE id < 3
+
+query
+SELECT id FROM users WHERE id < 3
+----
+id
+1
+2
+
+statement error CHECK constraint on "users" failed
+UPDATE users SET age = -5 WHERE id = 1
+
+query
+SELECT id, age FROM users WHERE id = 1
+----
+id|age
+1|32
+
+# Deleting a row frees its key.
+statement ok
+DELETE FROM users WHERE id = 5
+
+statement ok
+INSERT INTO users VALUES (5, 'eve@example.com', 2)
+
+query
+SELECT id, email, age FROM users WHERE id = 5
+----
+id|email|age
+5|eve@example.com|2
+
+# A key over several columns is one constraint over the tuple: the parts
+# repeat freely, the combination does not.
+statement ok
+CREATE TABLE seats (aisle INT, letter TEXT, holder TEXT, PRIMARY KEY (aisle, letter))
+
+statement ok
+INSERT INTO seats VALUES (1, 'a', 'ann'), (1, 'b', 'bo'), (2, 'a', 'cyd')
+
+statement error duplicate value (1, 'a') for PRIMARY KEY (aisle, letter)
+INSERT INTO seats VALUES (1, 'a', 'dee')
+
+# Every column of the key is NOT NULL, including one that only the table-level
+# clause names.
+statement error column "letter" must not be NULL
+INSERT INTO seats VALUES (3, NULL, 'dee')
+
+statement error column "aisle" must not be NULL
+INSERT INTO seats VALUES (NULL, 'c', 'dee')
+
+query
+SELECT aisle, letter, holder FROM seats
+----
+aisle|letter|holder
+1|a|ann
+1|b|bo
+2|a|cyd
+
+# A unique key over several columns is exempt when any part of it is NULL,
+# because the tuple is then not equal to anything, itself included.
+statement ok
+CREATE TABLE badges (person TEXT, colour TEXT, number INT, UNIQUE (colour, number))
+
+statement ok
+INSERT INTO badges VALUES ('ann', 'red', 1), ('bo', 'red', NULL), ('cyd', 'red', NULL)
+
+statement ok
+INSERT INTO badges VALUES ('dee', NULL, 1)
+
+statement error duplicate value ('red', 1) for UNIQUE (colour, number)
+INSERT INTO badges VALUES ('eve', 'red', 1)
+
+statement ok
+INSERT INTO badges VALUES ('eve', 'blue', 1)
+
+query
+SELECT person, colour, number FROM badges
+----
+person|colour|number
+ann|red|1
+bo|red|NULL
+cyd|red|NULL
+dee|NULL|1
+eve|blue|1
+
+# A condition written as a table clause reads the whole row, and one written
+# beside a column may do the same.
+statement ok
+CREATE TABLE spans (lo INT, hi INT, note TEXT, CHECK (lo <= hi))
+
+statement ok
+INSERT INTO spans VALUES (1, 2, 'fine'), (5, 5, 'touching')
+
+statement error CHECK constraint on "spans" failed
+INSERT INTO spans VALUES (3, 2, 'backwards')
+
+statement ok
+INSERT INTO spans VALUES (NULL, 2, 'half known')
+
+statement ok
+INSERT INTO spans VALUES (7, NULL, 'other half')
+
+query
+SELECT lo, hi, note FROM spans
+----
+lo|hi|note
+1|2|fine
+5|5|touching
+NULL|2|half known
+7|NULL|other half
+
+statement ok
+CREATE TABLE ranges (lo INT, hi INT CHECK (lo <= hi))
+
+statement error CHECK constraint on "ranges" failed
+INSERT INTO ranges VALUES (4, 3)
+
+statement ok
+INSERT INTO ranges VALUES (3, 4)
+
+# Several conditions on one table all have to hold.
+statement ok
+CREATE TABLE readings (n INT CHECK (n > 0), m INT, CHECK (m < 100))
+
+statement error CHECK constraint on "readings" failed
+INSERT INTO readings VALUES (0, 5)
+
+statement error CHECK constraint on "readings" failed
+INSERT INTO readings VALUES (5, 500)
+
+statement ok
+INSERT INTO readings VALUES (5, 50)
+
+# The clauses on a column may be written in any order.
+statement ok
+CREATE TABLE mixed (a INT CHECK (a < 100) UNIQUE NOT NULL, b TEXT)
+
+statement ok
+INSERT INTO mixed VALUES (1, 'x')
+
+statement error duplicate value (1) for UNIQUE (a)
+INSERT INTO mixed VALUES (1, 'y')
+
+statement error column "a" must not be NULL
+INSERT INTO mixed VALUES (NULL, 'y')
+
+statement error CHECK constraint on "mixed" failed
+INSERT INTO mixed VALUES (200, 'y')
+
+# What a table cannot say. A second primary key is refused at either level,
+# because a table has one or none.
+statement error table "twokeys" has more than one primary key
+CREATE TABLE twokeys (a INT PRIMARY KEY, b INT PRIMARY KEY)
+
+statement error table "twokeys" has more than one primary key
+CREATE TABLE twokeys (a INT PRIMARY KEY, b INT, PRIMARY KEY (b))
+
+statement error table "twokeys" has more than one primary key
+CREATE TABLE twokeys (a INT, b INT, PRIMARY KEY (a), PRIMARY KEY (b))
+
+statement error table "absent" has no column "z"
+CREATE TABLE absent (a INT, PRIMARY KEY (z))
+
+statement error table "absent" has no column "z"
+CREATE TABLE absent (a INT, UNIQUE (a, z))
+
+statement error no column "z"
+CREATE TABLE absent (a INT CHECK (z > 0))
+
+statement error a CHECK must be a condition, got INT
+CREATE TABLE absent (a INT CHECK (a + 1))
+
+statement error a CHECK must be a condition, got TEXT
+CREATE TABLE absent (a TEXT, CHECK (a))
+
+# None of those left a table behind, so both names are still free: a leftover
+# would come back as the name being taken.
+statement ok
+CREATE TABLE absent (a INT CHECK (a > 0))
+
+statement ok
+CREATE TABLE twokeys (a INT PRIMARY KEY, b INT UNIQUE)
+
+query
+SELECT a FROM absent
+----
+a
+
+# The new words are reserved, so a table or column called one of them has to be
+# quoted the way any other reserved word does.
+statement error reserved word
+CREATE TABLE quoted (default INT)
+
+statement error reserved word
+CREATE TABLE quoted (a INT, key TEXT)
+
+statement error reserved word
+CREATE TABLE check (a INT)
+
+statement error reserved word
+CREATE TABLE primary (a INT)
+
+statement error reserved word
+CREATE TABLE unique (a INT)
+
+statement error reserved word
+CREATE TABLE quoted (a INT, b TEXT, PRIMARY KEY (key))
+
+statement ok
+CREATE TABLE quoted ("default" INT PRIMARY KEY, "unique" TEXT UNIQUE, "check" INT)
+
+statement ok
+INSERT INTO quoted VALUES (1, 'a', 2)
+
+statement error duplicate value (1) for PRIMARY KEY
+INSERT INTO quoted VALUES (1, 'b', 3)
+
+statement error duplicate value ('a') for UNIQUE
+INSERT INTO quoted VALUES (2, 'a', 3)
+
+query
+SELECT "default", "unique", "check" FROM quoted
+----
+default|unique|check
+1|a|2
