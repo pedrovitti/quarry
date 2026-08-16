@@ -1,0 +1,157 @@
+# A derived table marked LATERAL may read the columns of tables written
+# before it in the same FROM, and produces its rows for each of their rows.
+
+statement ok
+CREATE TABLE bins (id INT, tag TEXT)
+
+statement ok
+INSERT INTO bins VALUES (10, 'a'), (20, 'b'), (30, 'c')
+
+statement ok
+CREATE TABLE parts (sku TEXT, bin INT, qty INT)
+
+statement ok
+INSERT INTO parts VALUES ('bolt', 10, 7), ('nut', 10, 3), ('cap', 20, 9), ('washer', 20, 5), ('pin', NULL, 1)
+
+query
+SELECT b.tag, p.sku FROM bins b JOIN LATERAL (SELECT sku FROM parts WHERE parts.bin = b.id) p ON TRUE ORDER BY b.tag, p.sku
+----
+tag|sku
+a|bolt
+a|nut
+b|cap
+b|washer
+
+# The inner query is a whole select run per row, so ordering and limiting
+# inside pick the best match for each row of the tables before it.
+query
+SELECT b.tag, top.sku FROM bins b JOIN LATERAL (SELECT sku FROM parts WHERE parts.bin = b.id ORDER BY qty DESC LIMIT 1) top ON TRUE ORDER BY b.tag
+----
+tag|sku
+a|bolt
+b|cap
+
+# A row whose lateral result is empty produces nothing; ON TRUE does not
+# rescue it.
+query
+SELECT b.tag, p.sku FROM bins b JOIN LATERAL (SELECT sku, qty FROM parts WHERE parts.bin = b.id) p ON p.qty > 4 ORDER BY b.tag, p.sku
+----
+tag|sku
+a|bolt
+b|cap
+b|washer
+
+# Without a FROM of its own the lateral computes one row over the row before
+# it.
+query
+SELECT b.id, d.next FROM bins b JOIN LATERAL (SELECT b.id + 1 AS next) d ON TRUE ORDER BY b.id
+----
+id|next
+10|11
+20|21
+30|31
+
+# Everything joined before the lateral is visible inside it at once.
+query
+SELECT b.tag, p.sku, x.score FROM bins b JOIN parts p ON p.bin = b.id JOIN LATERAL (SELECT p.qty + b.id AS score) x ON TRUE ORDER BY b.tag, p.sku
+----
+tag|sku|score
+a|bolt|17
+a|nut|13
+b|cap|29
+b|washer|25
+
+query
+SELECT * FROM bins b JOIN LATERAL (SELECT sku FROM parts WHERE parts.bin = b.id AND qty > 6) p ON TRUE ORDER BY b.id
+----
+id|tag|sku
+10|a|bolt
+20|b|cap
+
+query
+SELECT p.* FROM bins b JOIN LATERAL (SELECT sku, qty FROM parts WHERE parts.bin = b.id) p ON TRUE WHERE b.tag = 'a' ORDER BY p.sku
+----
+sku|qty
+bolt|7
+nut|3
+
+query
+SELECT b.tag, d.bin FROM bins b JOIN LATERAL (SELECT DISTINCT bin FROM parts WHERE parts.bin = b.id) d ON TRUE ORDER BY b.tag
+----
+tag|bin
+a|10
+b|20
+
+# An expression subquery inside a lateral reaches the tables before the
+# lateral too. This one always yields a row, so the row with no parts
+# survives with NULL, unlike the join above.
+query
+SELECT b.tag, d.v FROM bins b JOIN LATERAL (SELECT (SELECT sku FROM parts WHERE parts.bin = b.id ORDER BY qty DESC LIMIT 1) AS v) d ON TRUE ORDER BY b.tag
+----
+tag|v
+a|bolt
+b|cap
+c|NULL
+
+# Laterals nest, each seeing everything before it.
+query
+SELECT b.tag, y.n FROM bins b JOIN LATERAL (SELECT x.n FROM parts p JOIN LATERAL (SELECT p.qty * 2 AS n) x ON TRUE WHERE p.bin = b.id) y ON TRUE ORDER BY b.tag, y.n
+----
+tag|n
+a|6
+a|14
+b|10
+b|18
+
+# A lateral works inside a derived table, over that inner query's own FROM.
+query
+SELECT d.tag, d.sku FROM (SELECT b.tag, p.sku FROM bins b JOIN LATERAL (SELECT sku FROM parts WHERE parts.bin = b.id AND qty > 6) p ON TRUE) AS d ORDER BY d.tag
+----
+tag|sku
+a|bolt
+b|cap
+
+# First in FROM there is nothing before it, which is legal and useless.
+query
+SELECT d.one FROM LATERAL (SELECT 1 AS one) d
+----
+one
+1
+
+# Inside the lateral its own FROM wins a name the tables before it also
+# carry.
+query
+SELECT p.sku, d.v FROM parts p JOIN LATERAL (SELECT qty AS v FROM parts WHERE sku = 'bolt') d ON TRUE WHERE p.bin = 20 ORDER BY p.sku
+----
+sku|v
+cap|7
+washer|7
+
+# A later join reads the lateral's columns as any table's.
+query
+SELECT b.tag, d.sku, p2.qty FROM bins b JOIN LATERAL (SELECT sku FROM parts WHERE parts.bin = b.id AND qty > 6) d ON TRUE JOIN parts p2 ON p2.sku = d.sku ORDER BY b.tag
+----
+tag|sku|qty
+a|bolt|7
+b|cap|9
+
+# Unmarked, a derived table still reads nothing outside itself.
+statement error no column "b.id"
+SELECT b.tag, p.sku FROM bins b JOIN (SELECT sku FROM parts WHERE parts.bin = b.id) p ON TRUE
+
+# The enclosing statement stays out of reach even for a lateral.
+statement error no column "bins.tag"
+SELECT id FROM bins WHERE id IN (SELECT v FROM LATERAL (SELECT bins.tag AS v) d)
+
+statement error no column "bins.tag"
+SELECT id FROM bins WHERE id IN (SELECT d.v FROM parts p JOIN LATERAL (SELECT bins.tag AS v) d ON TRUE)
+
+statement error a subquery in FROM needs a name
+SELECT sku FROM bins b JOIN LATERAL (SELECT sku FROM parts WHERE parts.bin = b.id) ON TRUE
+
+# The lateral's columns carry their kinds before any row runs.
+statement error cannot compare TEXT with INT
+SELECT b.id FROM bins b JOIN LATERAL (SELECT sku FROM parts WHERE parts.bin = b.id) p ON TRUE WHERE p.sku IN (1, 2)
+
+statement error column "sku" is ambiguous
+SELECT sku FROM parts p JOIN LATERAL (SELECT sku FROM parts WHERE parts.bin = p.bin) d ON TRUE

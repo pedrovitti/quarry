@@ -1,0 +1,242 @@
+# A parenthesized SELECT stands where a value stands. Over IN and the
+# quantifiers it is the list, so the three-valued rules already written for a
+# value list carry over with nothing added. On its own it is one value, which
+# is where the row count starts to matter.
+
+statement ok
+CREATE TABLE items (id INT, name TEXT, bin INT)
+
+statement ok
+INSERT INTO items VALUES (1, 'bolt', 10), (2, 'nut', 20), (3, 'washer', 10), (4, 'cap', NULL)
+
+statement ok
+CREATE TABLE bins (id INT, tag TEXT)
+
+statement ok
+INSERT INTO bins VALUES (10, 'a'), (20, 'b'), (30, 'c')
+
+statement ok
+CREATE TABLE holes (v INT)
+
+statement ok
+INSERT INTO holes VALUES (10), (NULL)
+
+statement ok
+CREATE TABLE nothing (id INT, tag TEXT)
+
+# The result rows are the list, and a subject that is NULL is unknown against
+# it, exactly as it is against a written list.
+query
+SELECT id FROM items WHERE bin IN (SELECT id FROM bins) ORDER BY id
+----
+id
+1
+2
+3
+
+query
+SELECT id FROM items WHERE bin NOT IN (SELECT id FROM bins WHERE id = 30) ORDER BY id
+----
+id
+1
+2
+3
+
+# A NULL among the result rows is the case the list form already answers:
+# nothing that fails to match can ever be false, so NOT IN is never true.
+query
+SELECT id FROM items WHERE bin IN (SELECT v FROM holes) ORDER BY id
+----
+id
+1
+3
+
+query
+SELECT id FROM items WHERE bin NOT IN (SELECT v FROM holes) ORDER BY id
+----
+id
+
+query
+SELECT bin IN (SELECT v FROM holes) AS a, bin NOT IN (SELECT v FROM holes) AS b FROM items WHERE id = 2
+----
+a|b
+NULL|NULL
+
+# An empty result is the one case a written list cannot spell, so it is named.
+query
+SELECT bin IN (SELECT id FROM nothing) AS a, bin NOT IN (SELECT id FROM nothing) AS b FROM items WHERE id = 1
+----
+a|b
+false|true
+
+# The quantifiers read the same result the same way.
+query
+SELECT id FROM items WHERE bin > ANY (SELECT id FROM bins) ORDER BY id
+----
+id
+2
+
+query
+SELECT id FROM items WHERE bin < ALL (SELECT id FROM bins WHERE id > 10) ORDER BY id
+----
+id
+1
+3
+
+query
+SELECT id FROM items WHERE bin = ANY (SELECT id FROM bins WHERE tag = 'a') ORDER BY id
+----
+id
+1
+3
+
+# Over an empty result ANY is false and ALL is true, which is what those two
+# definitions give without a case of their own.
+query
+SELECT bin = ANY (SELECT id FROM nothing) AS a, bin = ALL (SELECT id FROM nothing) AS b FROM items WHERE id = 1
+----
+a|b
+false|true
+
+# A NULL among the result rows reaches the quantifiers the same way it reaches
+# IN: a comparison that settles still settles, and a subject that matches
+# nothing is unknown rather than false.
+query
+SELECT id FROM items WHERE bin = ANY (SELECT v FROM holes) ORDER BY id
+----
+id
+1
+3
+
+query
+SELECT id FROM items WHERE bin <> ALL (SELECT v FROM holes) ORDER BY id
+----
+id
+
+query
+SELECT bin = ANY (SELECT v FROM holes) AS a, bin <> ALL (SELECT v FROM holes) AS b FROM items WHERE id = 2
+----
+a|b
+NULL|NULL
+
+query
+SELECT bin > ALL (SELECT v FROM holes) AS a, bin >= ANY (SELECT v FROM holes) AS b FROM items WHERE id = 1
+----
+a|b
+false|true
+
+# A NOT negates the answer of the whole subquery, not each row of it.
+query
+SELECT id FROM items WHERE NOT bin IN (SELECT id FROM bins WHERE id = 10) ORDER BY id
+----
+id
+2
+
+# On its own a subquery is one value: the single value of its single row.
+query
+SELECT (SELECT tag FROM bins WHERE id = 10) AS a
+----
+a
+a
+
+# No rows is NULL, which is how a value that is not there has always read.
+query
+SELECT (SELECT tag FROM bins WHERE id = 99) AS a
+----
+a
+NULL
+
+# More than one row is refused when it happens, so a query that never reaches
+# the second row still answers.
+statement error a subquery used as a value returned more than one row
+SELECT (SELECT id FROM bins) AS a
+
+statement error a subquery used as a value returned more than one row
+SELECT id FROM items WHERE bin = (SELECT id FROM bins)
+
+# It stands where any other value stands.
+query
+SELECT id + (SELECT id FROM bins WHERE tag = 'a') AS a FROM items WHERE id = 1
+----
+a
+11
+
+query
+SELECT upper((SELECT tag FROM bins WHERE id = 20)) AS a
+----
+a
+B
+
+query
+SELECT id FROM items WHERE bin = (SELECT id FROM bins WHERE tag = 'b') ORDER BY id
+----
+id
+2
+
+statement ok
+INSERT INTO items VALUES (5, 'shim', (SELECT id FROM bins WHERE tag = 'c'))
+
+query
+SELECT id, bin FROM items WHERE id = 5
+----
+id|bin
+5|30
+
+statement ok
+DELETE FROM items WHERE id = 5
+
+# A subquery that returns more than one column is refused before any row is
+# read, wherever it stands.
+statement error a subquery must return one column
+SELECT id FROM items WHERE bin IN (SELECT id, tag FROM bins)
+
+statement error a subquery must return one column
+SELECT (SELECT id, tag FROM bins) AS a
+
+statement error a subquery must return one column
+SELECT id FROM items WHERE bin = ANY (SELECT id, tag FROM bins)
+
+# The kind of the result column is known without running it, so a comparison
+# that could never work is named the way a written list is.
+statement error cannot compare INT with TEXT
+SELECT id FROM items WHERE bin IN (SELECT tag FROM bins)
+
+statement error cannot compare INT with TEXT
+SELECT id FROM items WHERE bin < ALL (SELECT tag FROM bins)
+
+# Unaliased, the heading is the subquery as it was written.
+query
+SELECT bin IN (SELECT id FROM bins) FROM items WHERE id = 1
+----
+bin IN (SELECT id FROM bins)
+true
+
+query
+SELECT (SELECT tag FROM bins WHERE id = 10) FROM items WHERE id = 1
+----
+(SELECT tag FROM bins WHERE id = 10)
+a
+
+# UPDATE and DELETE choose their rows the same way a SELECT does.
+statement ok
+UPDATE items SET name = 'seen' WHERE bin IN (SELECT id FROM bins WHERE tag = 'a')
+
+query
+SELECT id, name FROM items ORDER BY id
+----
+id|name
+1|seen
+2|nut
+3|seen
+4|cap
+
+statement ok
+DELETE FROM items WHERE bin NOT IN (SELECT id FROM bins WHERE tag = 'a')
+
+query
+SELECT id FROM items ORDER BY id
+----
+id
+1
+3
+4

@@ -1,0 +1,178 @@
+# ANY and ALL spread one comparison over a list. The two quantifiers are each
+# other's mirror: ANY needs one item to hold, ALL needs every one to, and both
+# stay three-valued when the list holds a NULL.
+
+statement ok
+CREATE TABLE parts (id INT, sku TEXT, qty INT)
+
+statement ok
+INSERT INTO parts VALUES (1, 'bolt', 5), (2, 'nut', 12), (3, 'washer', NULL), (4, NULL, 30)
+
+statement ok
+CREATE TABLE bins (id INT, tally INT)
+
+statement ok
+INSERT INTO bins VALUES (1, 5), (2, 15), (3, 25), (4, NULL)
+
+# "= ANY" is IN under another name, and "<> ALL" is NOT IN.
+query
+SELECT id FROM parts WHERE id = ANY (1, 3) ORDER BY id
+----
+id
+1
+3
+
+query
+SELECT id FROM parts WHERE id <> ALL (1, 3) ORDER BY id
+----
+id
+2
+4
+
+query
+SELECT 1 = ANY (1, 2) AS a, 1 = ANY (2, 3) AS b, 1 <> ALL (2, 3) AS c, 1 <> ALL (1, 2) AS d
+----
+a|b|c|d
+true|false|true|false
+
+# The other comparisons quantify too, and the answer is about the whole list
+# rather than about any one item.
+query
+SELECT 3 < ANY (1, 5) AS a, 3 < ALL (1, 5) AS b, 3 < ALL (4, 5) AS c, 3 >= ANY (3, 9) AS d
+----
+a|b|c|d
+true|false|true|true
+
+query
+SELECT 2 > ALL (1) AS a, 2 <= ANY (1, 2) AS b, 2 <= ALL (2, 3) AS c
+----
+a|b|c
+true|true|true
+
+# A single item behaves as the plain comparison does.
+query
+SELECT id FROM parts WHERE qty > ANY (10) ORDER BY id
+----
+id
+2
+4
+
+# The three-valued part. ANY is false only when every comparison failed, so a
+# NULL in the list leaves it unknown; ALL is true only when every comparison
+# held, so the same NULL leaves that unknown too.
+query
+SELECT 1 = ANY (1, NULL) AS a, 1 = ANY (2, NULL) AS b, 1 = ALL (1, NULL) AS c, 1 = ALL (2, NULL) AS d
+----
+a|b|c|d
+true|NULL|NULL|false
+
+query
+SELECT 3 < ANY (5, NULL) AS a, 3 < ANY (1, NULL) AS b, 3 < ALL (5, NULL) AS c, 3 < ALL (1, NULL) AS d
+----
+a|b|c|d
+true|NULL|NULL|false
+
+# An unknown subject is unknown whatever the list says.
+query
+SELECT NULL = ANY (1, 2) AS a, NULL <> ALL (1, 2) AS b
+----
+a|b
+NULL|NULL
+
+# Unknown does not pass a filter, in either quantifier, so the row with no
+# quantity is in neither answer.
+query
+SELECT id FROM parts WHERE qty = ANY (5, 30) ORDER BY id
+----
+id
+1
+4
+
+query
+SELECT id FROM parts WHERE qty <> ALL (5, 30) ORDER BY id
+----
+id
+2
+
+# Items are expressions over the row.
+query
+SELECT id FROM parts WHERE 12 = ANY (qty, qty + 7) ORDER BY id
+----
+id
+1
+2
+
+query
+SELECT id FROM parts WHERE id < ALL (qty, 4) ORDER BY id
+----
+id
+1
+2
+
+# A quantified comparison sits where a comparison sits.
+query
+SELECT id FROM parts WHERE id = ANY (1, 2) AND qty < ALL (20, 30) ORDER BY id
+----
+id
+1
+2
+
+query
+SELECT id FROM parts WHERE NOT id = ANY (1, 2) ORDER BY id
+----
+id
+3
+4
+
+query
+SELECT id, id = ANY (2, 4) AS flagged FROM parts ORDER BY flagged, id
+----
+id|flagged
+1|false
+3|false
+2|true
+4|true
+
+query
+SELECT typeof(1 = ANY (1)) AS a, (1 = ANY (1)) = TRUE AS b
+----
+a|b
+BOOL|true
+
+# Unaliased, the heading is the quantified predicate as it was written.
+query
+SELECT id = ANY (1, 2), id <> ALL (1, 2) FROM parts WHERE id = 1
+----
+id = ANY (1, 2)|id <> ALL (1, 2)
+true|false
+
+# Kinds are settled before any row is read, wherever the offending item sits.
+statement error cannot compare INT with TEXT
+SELECT id FROM parts WHERE id = ANY (1, 'x')
+
+statement error cannot compare TEXT with INT
+SELECT sku FROM parts WHERE sku < ALL ('a', 2)
+
+# UPDATE and DELETE choose their rows the same way.
+statement ok
+UPDATE bins SET tally = 0 WHERE tally = ANY (15, 25)
+
+query
+SELECT id, tally FROM bins ORDER BY id
+----
+id|tally
+1|5
+2|0
+3|0
+4|NULL
+
+statement ok
+DELETE FROM bins WHERE tally <> ALL (0)
+
+query
+SELECT id FROM bins ORDER BY id
+----
+id
+2
+3
+4
