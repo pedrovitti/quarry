@@ -209,6 +209,48 @@ type IsNullExpr struct {
 func (i *IsNullExpr) Pos() lex.Position { return i.Operand.Pos() }
 func (*IsNullExpr) exprNode()           {}
 
+// InExpr is "x IN (a, b)" or, when Negated, "x NOT IN (a, b)".
+type InExpr struct {
+	Operand Expr
+	List    []Expr
+	Negated bool
+}
+
+func (i *InExpr) Pos() lex.Position { return i.Operand.Pos() }
+func (*InExpr) exprNode()           {}
+
+// Quantifier says how a list of comparisons is reduced to one answer.
+type Quantifier int
+
+const (
+	InvalidQuantifier Quantifier = iota
+	AnyOf
+	AllOf
+)
+
+func (q Quantifier) String() string {
+	switch q {
+	case AnyOf:
+		return "ANY"
+	case AllOf:
+		return "ALL"
+	}
+	return "invalid quantifier"
+}
+
+// QuantifiedExpr is a comparison spread over a list: "x = ANY (1, 2)" asks
+// whether any of the comparisons holds, "x < ALL (1, 2)" whether all of them
+// do.
+type QuantifiedExpr struct {
+	Operand    Expr
+	Op         BinaryOp
+	Quantifier Quantifier
+	List       []Expr
+}
+
+func (q *QuantifiedExpr) Pos() lex.Position { return q.Operand.Pos() }
+func (*QuantifiedExpr) exprNode()           {}
+
 // ParenExpr preserves explicit parentheses so that String round-trips without
 // having to re-derive them from precedence.
 type ParenExpr struct {
@@ -229,3 +271,15 @@ func Unparen(e Expr) Expr {
 		e = p.Inner
 	}
 }
+
+// SubqueryExpr is a SELECT standing where a value stands. It prints without
+// the parentheses that delimit it, because every place it can appear supplies
+// its own: a ParenExpr around a scalar one, and the list parentheses of IN or
+// a quantifier around the other.
+type SubqueryExpr struct {
+	Select *Select
+	Start  lex.Position
+}
+
+func (s *SubqueryExpr) Pos() lex.Position { return s.Start }
+func (*SubqueryExpr) exprNode()           {}

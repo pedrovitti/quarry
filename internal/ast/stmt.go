@@ -48,6 +48,20 @@ func (t *TableName) Ref() string {
 	return t.Name
 }
 
+// SubqueryTable is a parenthesized SELECT read as a table, which FROM must
+// name: "FROM (SELECT ...) AS t". Its columns are the inner query's output
+// columns, qualified by the alias. Marked Lateral, the inner query may read
+// the columns of tables written before it in the same FROM.
+type SubqueryTable struct {
+	Select  *Select
+	Alias   string
+	Lateral bool
+	Start   lex.Position
+}
+
+func (s *SubqueryTable) Pos() lex.Position { return s.Start }
+func (*SubqueryTable) tableRefNode()       {}
+
 // Join is an inner join of two table references. Quarry has only one join
 // type, so there is no join-kind field to switch on yet.
 type Join struct {
