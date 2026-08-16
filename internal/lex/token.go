@@ -40,7 +40,9 @@ const (
 
 	keywordBegin
 
+	All
 	And
+	Any
 	As
 	Asc
 	By
@@ -51,10 +53,12 @@ const (
 	Drop
 	False
 	From
+	In
 	Insert
 	Into
 	Is
 	Join
+	Lateral
 	Limit
 	Not
 	Null
@@ -102,7 +106,9 @@ var kindNames = map[Kind]string{
 	Semicolon: ";",
 	Dot:       ".",
 
+	All:      "ALL",
 	And:      "AND",
+	Any:      "ANY",
 	As:       "AS",
 	Asc:      "ASC",
 	By:       "BY",
@@ -113,10 +119,12 @@ var kindNames = map[Kind]string{
 	Drop:     "DROP",
 	False:    "FALSE",
 	From:     "FROM",
+	In:       "IN",
 	Insert:   "INSERT",
 	Into:     "INTO",
 	Is:       "IS",
 	Join:     "JOIN",
+	Lateral:  "LATERAL",
 	Limit:    "LIMIT",
 	Not:      "NOT",
 	Null:     "NULL",
