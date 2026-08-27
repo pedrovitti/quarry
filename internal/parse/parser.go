@@ -107,6 +107,8 @@ func (p *Parser) Statement() (ast.Stmt, error) {
 		return p.parseCreateTable()
 	case lex.Drop:
 		return p.parseDropTable()
+	case lex.Alter:
+		return p.parseAlterTable()
 	}
 	return nil, unexpected(p.tok, "the start of a statement")
 }

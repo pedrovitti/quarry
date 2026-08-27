@@ -40,11 +40,15 @@ const (
 
 	keywordBegin
 
+	Add
+	Alter
 	And
 	As
 	Asc
 	By
+	Column
 	Create
+	Default
 	Delete
 	Desc
 	Distinct
@@ -62,11 +66,15 @@ const (
 	On
 	Or
 	Order
+	Rename
 	Select
 	Set
 	Table
+	To
 	True
+	Type
 	Update
+	Using
 	Values
 	Where
 
@@ -102,11 +110,15 @@ var kindNames = map[Kind]string{
 	Semicolon: ";",
 	Dot:       ".",
 
+	Add:      "ADD",
+	Alter:    "ALTER",
 	And:      "AND",
 	As:       "AS",
 	Asc:      "ASC",
 	By:       "BY",
+	Column:   "COLUMN",
 	Create:   "CREATE",
+	Default:  "DEFAULT",
 	Delete:   "DELETE",
 	Desc:     "DESC",
 	Distinct: "DISTINCT",
@@ -124,11 +136,15 @@ var kindNames = map[Kind]string{
 	On:       "ON",
 	Or:       "OR",
 	Order:    "ORDER",
+	Rename:   "RENAME",
 	Select:   "SELECT",
 	Set:      "SET",
 	Table:    "TABLE",
+	To:       "TO",
 	True:     "TRUE",
+	Type:     "TYPE",
 	Update:   "UPDATE",
+	Using:    "USING",
 	Values:   "VALUES",
 	Where:    "WHERE",
 }
