@@ -73,6 +73,22 @@ func (c *Catalog) Drop(name string) error {
 	return nil
 }
 
+// Rename moves a table to a new name. It reports an error if the old name is
+// missing or the new one is taken.
+func (c *Catalog) Rename(old, new string) error {
+	table, exists := c.tables[old]
+	if !exists {
+		return errorf("table %q does not exist", old)
+	}
+	if _, taken := c.tables[new]; taken {
+		return errorf("table %q already exists", new)
+	}
+	delete(c.tables, old)
+	table.Name = new
+	c.tables[new] = table
+	return nil
+}
+
 // Get returns a table by name.
 func (c *Catalog) Get(name string) (*Table, error) {
 	table, exists := c.tables[name]
