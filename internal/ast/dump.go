@@ -105,6 +105,45 @@ func Dump(n Node) string {
 
 	case *DropTable:
 		return list("drop-table", QuoteIdent(node.Name))
+
+	case *AlterTable:
+		parts := []string{"alter-table", QuoteIdent(node.Table)}
+		for _, action := range node.Actions {
+			parts = append(parts, dumpAction(action))
+		}
+		return list(parts...)
+	}
+	return "?"
+}
+
+func dumpAction(action AlterAction) string {
+	switch act := action.(type) {
+	case *RenameTable:
+		return list("rename-to", QuoteIdent(act.To))
+	case *RenameColumn:
+		return list("rename-column", QuoteIdent(act.From), QuoteIdent(act.To))
+	case *AddColumn:
+		def := []string{"add-column", QuoteIdent(act.Def.Name), act.Def.Type.String()}
+		if act.Def.NotNull {
+			def = append(def, "not-null")
+		}
+		if act.Default != nil {
+			def = append(def, list("default", Dump(act.Default)))
+		}
+		return list(def...)
+	case *DropColumn:
+		return list("drop-column", QuoteIdent(act.Name))
+	case *SetNotNull:
+		if act.NotNull {
+			return list("set-not-null", QuoteIdent(act.Column))
+		}
+		return list("drop-not-null", QuoteIdent(act.Column))
+	case *SetColumnType:
+		parts := []string{"set-type", QuoteIdent(act.Column), act.Type.String()}
+		if act.Using != nil {
+			parts = append(parts, list("using", Dump(act.Using)))
+		}
+		return list(parts...)
 	}
 	return "?"
 }

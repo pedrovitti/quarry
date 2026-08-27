@@ -223,6 +223,43 @@ func (c *CreateTable) String() string {
 
 func (d *DropTable) String() string { return "DROP TABLE " + QuoteIdent(d.Name) }
 
+func (a *AlterTable) String() string {
+	actions := make([]string, len(a.Actions))
+	for i, action := range a.Actions {
+		actions[i] = actionString(action)
+	}
+	return "ALTER TABLE " + QuoteIdent(a.Table) + " " + strings.Join(actions, ", ")
+}
+
+func actionString(action AlterAction) string {
+	switch act := action.(type) {
+	case *RenameTable:
+		return "RENAME TO " + QuoteIdent(act.To)
+	case *RenameColumn:
+		return "RENAME COLUMN " + QuoteIdent(act.From) + " TO " + QuoteIdent(act.To)
+	case *AddColumn:
+		out := "ADD COLUMN " + act.Def.String()
+		if act.Default != nil {
+			out += " DEFAULT " + act.Default.String()
+		}
+		return out
+	case *DropColumn:
+		return "DROP COLUMN " + QuoteIdent(act.Name)
+	case *SetNotNull:
+		if act.NotNull {
+			return "ALTER COLUMN " + QuoteIdent(act.Column) + " SET NOT NULL"
+		}
+		return "ALTER COLUMN " + QuoteIdent(act.Column) + " DROP NOT NULL"
+	case *SetColumnType:
+		out := "ALTER COLUMN " + QuoteIdent(act.Column) + " TYPE " + act.Type.String()
+		if act.Using != nil {
+			out += " USING " + act.Using.String()
+		}
+		return out
+	}
+	return "?"
+}
+
 // itoa avoids pulling strconv in for the one place a small non-negative
 // integer is rendered.
 func itoa(n int) string {
