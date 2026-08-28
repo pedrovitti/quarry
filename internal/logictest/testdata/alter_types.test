@@ -1,0 +1,156 @@
+# ALTER COLUMN ... TYPE: changing what a column holds, with and without a
+# USING expression to compute the new values.
+
+statement ok
+CREATE TABLE metrics (id INT, reading INT, label TEXT)
+
+statement ok
+INSERT INTO metrics VALUES (1, 10, '150'), (2, 25, '90'), (3, NULL, NULL)
+
+# Without USING, values move only where storage would widen them anyway.
+statement ok
+ALTER TABLE metrics ALTER COLUMN reading TYPE FLOAT
+
+query
+SELECT id, reading FROM metrics ORDER BY id
+----
+id|reading
+1|10.0
+2|25.0
+3|NULL
+
+# The reverse narrows, so it is refused; the column keeps its values.
+statement error cannot store FLOAT value in INT column
+ALTER TABLE metrics ALTER COLUMN reading TYPE INT
+
+query
+SELECT reading FROM metrics WHERE id = 1
+----
+reading
+10.0
+
+# TEXT does not read as a number without being told how.
+statement error cannot store TEXT value in INT column
+ALTER TABLE metrics ALTER COLUMN label TYPE INT
+
+# USING computes the replacement from the old row; here the digits count.
+statement ok
+ALTER TABLE metrics ALTER COLUMN label TYPE INT USING length(label)
+
+query
+SELECT id, label FROM metrics ORDER BY id
+----
+id|label
+1|3
+2|2
+3|NULL
+
+# USING can narrow a float through a function that lands on an integer.
+statement ok
+ALTER TABLE metrics ALTER COLUMN reading TYPE INT USING round(reading)
+
+query
+SELECT id, reading FROM metrics ORDER BY id
+----
+id|reading
+1|10
+2|25
+3|NULL
+
+# The expression sees the whole row as it stands, not only the column.
+statement ok
+ALTER TABLE metrics ALTER COLUMN reading TYPE INT USING reading + id
+
+query
+SELECT id, reading FROM metrics ORDER BY id
+----
+id|reading
+1|11
+2|27
+3|NULL
+
+# What USING produces still has to fit the new type.
+statement error cannot store TEXT value in INT column
+ALTER TABLE metrics ALTER COLUMN reading TYPE INT USING 'broken'
+
+# A failing USING expression fails the statement and changes nothing.
+statement ok
+CREATE TABLE odd (v FLOAT)
+
+statement ok
+INSERT INTO odd VALUES (4.0), (-9.0)
+
+statement error sqrt of a negative number
+ALTER TABLE odd ALTER COLUMN v TYPE FLOAT USING sqrt(v)
+
+query
+SELECT v FROM odd ORDER BY v
+----
+v
+-9.0
+4.0
+
+# After the change, new rows are held to the new type.
+statement error cannot store TEXT value in INT column
+INSERT INTO metrics VALUES (4, 1, 'text again')
+
+statement ok
+INSERT INTO metrics VALUES (4, 1, 8)
+
+query
+SELECT id, label FROM metrics WHERE id = 4
+----
+id|label
+4|8
+
+# The declared name can change even when the stored shape does not: INT and
+# BIGINT hold the same values, and the swap is legal in both directions.
+statement ok
+ALTER TABLE metrics ALTER COLUMN id TYPE BIGINT
+
+query
+SELECT id FROM metrics WHERE id = 4
+----
+id
+4
+
+statement ok
+ALTER TABLE metrics ALTER COLUMN id TYPE INT
+
+# A type change composes with the other actions, left to right: rename first,
+# then convert under the new name.
+statement ok
+CREATE TABLE mixed (a INT)
+
+statement ok
+INSERT INTO mixed VALUES (7)
+
+statement ok
+ALTER TABLE mixed RENAME COLUMN a TO b, ALTER COLUMN b TYPE FLOAT
+
+query
+SELECT b FROM mixed
+----
+b
+7.0
+
+# And atomically: a failing type change undoes an earlier rename.
+statement error cannot store FLOAT value in INT column
+ALTER TABLE mixed RENAME COLUMN b TO c, RENAME COLUMN c TO b, ALTER COLUMN b TYPE INT
+
+query
+SELECT b FROM mixed
+----
+b
+7.0
+
+# USING with no type mismatch is still a rewrite: values can be replaced
+# wholesale while the type stays put.
+statement ok
+ALTER TABLE mixed ALTER COLUMN b TYPE FLOAT USING b * 10
+
+query
+SELECT b FROM mixed
+----
+b
+70.0
