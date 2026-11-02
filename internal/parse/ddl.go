@@ -276,14 +276,8 @@ func (p *Parser) parseAlterAction() (ast.AlterAction, error) {
 		if err != nil {
 			return nil, err
 		}
-		action := &ast.AddColumn{Def: def}
-		if p.accept(lex.Default) {
-			value, err := p.parseExpr()
-			if err != nil {
-				return nil, err
-			}
-			action.Default = value
-		}
+		action := &ast.AddColumn{Def: def, Default: def.Default}
+		action.Def.Default = nil
 		return action, nil
 
 	case lex.Drop:
