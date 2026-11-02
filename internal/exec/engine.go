@@ -91,6 +91,8 @@ func (e *Engine) Run(stmt ast.Stmt, params ...types.Value) (*Result, error) {
 		return e.runCreateTable(node)
 	case *ast.DropTable:
 		return e.runDropTable(node)
+	case *ast.AlterTable:
+		return e.runAlterTable(node, params)
 	}
 	return nil, errorf("cannot execute this kind of statement")
 }

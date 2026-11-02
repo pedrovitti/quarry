@@ -101,6 +101,16 @@ func Walk(n Node, visit Visitor) {
 	case *ParenExpr:
 		Walk(node.Inner, visit)
 
+	case *AlterTable:
+		for _, action := range node.Actions {
+			switch act := action.(type) {
+			case *AddColumn:
+				walkExpr(act.Default, visit)
+			case *SetColumnType:
+				walkExpr(act.Using, visit)
+			}
+		}
+
 	case *TableName, *Literal, *ColumnRef, *Star, *Param, *DropTable:
 		// Leaves.
 	}

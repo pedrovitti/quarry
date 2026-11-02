@@ -1,0 +1,131 @@
+# ALTER TABLE error cases, and the rule that makes them survivable: a failed
+# statement leaves the table exactly as it was, whichever action failed.
+
+statement ok
+CREATE TABLE crew (id INT, name TEXT)
+
+statement ok
+CREATE TABLE cargo (label TEXT)
+
+statement ok
+INSERT INTO crew VALUES (1, 'ada'), (2, NULL)
+
+# The table is checked before any action runs.
+statement error "nobody"
+ALTER TABLE nobody ADD COLUMN x INT
+
+# Renaming onto a taken name, the current one included.
+statement error already exists
+ALTER TABLE crew RENAME TO cargo
+
+statement error already exists
+ALTER TABLE cargo RENAME TO crew
+
+# Column renames need a real source and a free target.
+statement error "nope"
+ALTER TABLE crew RENAME COLUMN nope TO better
+
+statement error already exists
+ALTER TABLE crew RENAME COLUMN id TO name
+
+# Adding a column that is already there.
+statement error already exists
+ALTER TABLE crew ADD COLUMN name TEXT
+
+# NOT NULL with no backfill cannot be satisfied once rows exist.
+statement error must not be NULL
+ALTER TABLE crew ADD COLUMN rank INT NOT NULL
+
+# Neither can a backfill that works out to NULL.
+statement error must not be NULL
+ALTER TABLE crew ADD COLUMN rank INT NOT NULL DEFAULT NULL
+
+# The backfill expression has no row to read.
+statement error "id"
+ALTER TABLE crew ADD COLUMN twin INT DEFAULT id
+
+# And it must fit the declared type.
+statement error cannot store TEXT value in INT column
+ALTER TABLE crew ADD COLUMN rank INT DEFAULT 'high'
+
+statement error "ghost"
+ALTER TABLE crew DROP COLUMN ghost
+
+# A table cannot be emptied of columns.
+statement error only column
+ALTER TABLE cargo DROP COLUMN label
+
+statement error "ghost"
+ALTER TABLE crew ALTER COLUMN ghost SET NOT NULL
+
+statement error "ghost"
+ALTER TABLE crew ALTER COLUMN ghost DROP NOT NULL
+
+# SET NOT NULL scans what is already there.
+statement error must not be NULL
+ALTER TABLE crew ALTER COLUMN name SET NOT NULL
+
+# Malformed statements are rejected outright.
+statement error syntax error
+ALTER TABLE
+
+statement error "BLOB"
+ALTER TABLE crew ADD COLUMN blob_col BLOB
+
+statement error syntax error
+ALTER TABLE crew ADD COLUMN
+
+statement error syntax error
+ALTER TABLE crew FROBNICATE
+
+statement error already exists
+ALTER TABLE crew ADD COLUMN pay INT, ADD COLUMN pay INT
+
+# A failure in a later action undoes the earlier ones: the rename never
+# happened, so the old column name still resolves afterwards.
+statement error "id"
+ALTER TABLE crew RENAME COLUMN id TO num, DROP COLUMN id
+
+query
+SELECT id, name FROM crew ORDER BY id
+----
+id|name
+1|ada
+2|NULL
+
+# Same with an add followed by a failing action: the column is not there.
+statement error "ghost"
+ALTER TABLE crew ADD COLUMN extra INT DEFAULT 5, DROP COLUMN ghost
+
+query
+SELECT * FROM crew ORDER BY id
+----
+id|name
+1|ada
+2|NULL
+
+statement error no column "extra"
+SELECT extra FROM crew
+
+# A drop that later actions regret is undone too: rows keep their values.
+statement error already exists
+ALTER TABLE crew DROP COLUMN name, ADD COLUMN wider TEXT, RENAME COLUMN wider TO name, ADD COLUMN name INT
+
+query
+SELECT id, name FROM crew ORDER BY id
+----
+id|name
+1|ada
+2|NULL
+
+# The whole statement failing means later statements still see the old shape.
+statement ok
+INSERT INTO crew VALUES (3, 'lin')
+
+query
+SELECT * FROM crew ORDER BY id
+----
+id|name
+1|ada
+2|NULL
+3|lin

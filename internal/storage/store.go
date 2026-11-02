@@ -44,6 +44,20 @@ func (s *Store) Drop(table string) error {
 	return nil
 }
 
+// Rename moves a table's heap to a new name, keeping the rows and their ids.
+func (s *Store) Rename(old, new string) error {
+	heap, exists := s.heaps[old]
+	if !exists {
+		return errorf("no storage for table %q", old)
+	}
+	if _, taken := s.heaps[new]; taken {
+		return errorf("storage for table %q already exists", new)
+	}
+	delete(s.heaps, old)
+	s.heaps[new] = heap
+	return nil
+}
+
 // Has reports whether a table has storage.
 func (s *Store) Has(table string) bool {
 	_, exists := s.heaps[table]

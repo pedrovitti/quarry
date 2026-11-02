@@ -138,3 +138,64 @@ type DropTable struct {
 
 func (d *DropTable) Pos() lex.Position { return d.Start }
 func (*DropTable) stmtNode()           {}
+
+// AlterTable is an ALTER TABLE statement: one table, one or more actions
+// applied to it left to right.
+type AlterTable struct {
+	Table   string
+	Actions []AlterAction
+	Start   lex.Position
+}
+
+func (a *AlterTable) Pos() lex.Position { return a.Start }
+func (*AlterTable) stmtNode()           {}
+
+// AlterAction is one action in an ALTER TABLE list.
+type AlterAction interface {
+	alterAction()
+}
+
+// RenameTable is RENAME TO: the table gets a new name.
+type RenameTable struct {
+	To string
+}
+
+// RenameColumn is RENAME COLUMN ... TO: a column gets a new name.
+type RenameColumn struct {
+	From string
+	To   string
+}
+
+// AddColumn is ADD COLUMN: a new column, with an optional expression that
+// backfills the rows the table already has.
+type AddColumn struct {
+	Def     ColumnDef
+	Default Expr
+}
+
+// DropColumn is DROP COLUMN.
+type DropColumn struct {
+	Name string
+}
+
+// SetNotNull is ALTER COLUMN ... SET NOT NULL or DROP NOT NULL, depending on
+// NotNull.
+type SetNotNull struct {
+	Column  string
+	NotNull bool
+}
+
+// SetColumnType is ALTER COLUMN ... TYPE, with an optional USING expression
+// that computes each stored value's replacement.
+type SetColumnType struct {
+	Column string
+	Type   TypeName
+	Using  Expr
+}
+
+func (*RenameTable) alterAction()   {}
+func (*RenameColumn) alterAction()  {}
+func (*AddColumn) alterAction()     {}
+func (*DropColumn) alterAction()    {}
+func (*SetNotNull) alterAction()    {}
+func (*SetColumnType) alterAction() {}

@@ -1,0 +1,215 @@
+# ALTER TABLE: renaming tables and columns, adding and dropping columns, and
+# toggling NOT NULL. The type-change action has its own file.
+
+statement ok
+CREATE TABLE people (id INT NOT NULL, name TEXT)
+
+statement ok
+INSERT INTO people VALUES (1, 'ada'), (2, 'grace')
+
+# Renaming a table moves the rows with it and frees nothing else.
+statement ok
+ALTER TABLE people RENAME TO staff
+
+query
+SELECT id, name FROM staff ORDER BY id
+----
+id|name
+1|ada
+2|grace
+
+statement error table "people" does not exist
+SELECT * FROM people
+
+# Renaming a column: the new name resolves, the old one stops.
+statement ok
+ALTER TABLE staff RENAME COLUMN name TO full_name
+
+query
+SELECT full_name FROM staff ORDER BY id
+----
+full_name
+ada
+grace
+
+statement error no column "name"
+SELECT name FROM staff
+
+# An added column comes last, and existing rows read NULL in it.
+statement ok
+ALTER TABLE staff ADD COLUMN age INT
+
+query
+SELECT * FROM staff ORDER BY id
+----
+id|full_name|age
+1|ada|NULL
+2|grace|NULL
+
+# The wider shape is what INSERT without a column list now means.
+statement ok
+INSERT INTO staff VALUES (3, 'alan', 41)
+
+query
+SELECT id, age FROM staff ORDER BY id
+----
+id|age
+1|NULL
+2|NULL
+3|41
+
+# A DEFAULT backfills the rows that already exist.
+statement ok
+ALTER TABLE staff ADD COLUMN grade INT DEFAULT 7
+
+query
+SELECT id, grade FROM staff ORDER BY id
+----
+id|grade
+1|7
+2|7
+3|7
+
+# The default is a backfill, not a property of the column: an INSERT that
+# omits the column still writes NULL.
+statement ok
+INSERT INTO staff (id, full_name) VALUES (4, 'edsger')
+
+query
+SELECT id, grade FROM staff ORDER BY id
+----
+id|grade
+1|7
+2|7
+3|7
+4|NULL
+
+# The backfill value may be any expression without column references, and it
+# converts into the declared type the way a stored value does.
+statement ok
+ALTER TABLE staff ADD COLUMN score FLOAT DEFAULT 2 + 3
+
+query
+SELECT id, score FROM staff WHERE id = 1
+----
+id|score
+1|5.0
+
+statement ok
+ALTER TABLE staff ADD COLUMN badge TEXT DEFAULT upper('vip')
+
+query
+SELECT badge FROM staff WHERE id = 2
+----
+badge
+VIP
+
+# NOT NULL plus a DEFAULT is satisfiable on a table with rows.
+statement ok
+ALTER TABLE staff ADD COLUMN active BOOL NOT NULL DEFAULT true
+
+query
+SELECT id, active FROM staff WHERE id = 3
+----
+id|active
+3|true
+
+statement error column "active" must not be NULL
+INSERT INTO staff (id, full_name) VALUES (5, 'nobody')
+
+# Dropping a column narrows every row.
+statement ok
+ALTER TABLE staff DROP COLUMN badge
+
+statement error no column "badge"
+SELECT badge FROM staff
+
+query
+SELECT * FROM staff WHERE id = 1
+----
+id|full_name|age|grade|score|active
+1|ada|NULL|7|5.0|true
+
+# SET NOT NULL starts rejecting NULL from then on.
+statement ok
+CREATE TABLE towns (name TEXT NOT NULL, region TEXT)
+
+statement ok
+INSERT INTO towns VALUES ('bree', 'east')
+
+statement ok
+ALTER TABLE towns ALTER COLUMN region SET NOT NULL
+
+statement error column "region" must not be NULL
+INSERT INTO towns VALUES ('dale', NULL)
+
+# DROP NOT NULL lifts the rule again, including one declared at creation.
+statement ok
+ALTER TABLE towns ALTER COLUMN name DROP NOT NULL
+
+statement ok
+ALTER TABLE towns ALTER COLUMN region DROP NOT NULL
+
+statement ok
+INSERT INTO towns VALUES (NULL, NULL)
+
+query
+SELECT name, region FROM towns ORDER BY name
+----
+name|region
+NULL|NULL
+bree|east
+
+# Actions in one statement apply left to right, each seeing the last one's
+# result: the added column is there for SET NOT NULL to find.
+statement ok
+CREATE TABLE fresh (a INT)
+
+statement ok
+ALTER TABLE fresh ADD COLUMN b INT, ALTER COLUMN b SET NOT NULL
+
+statement error column "b" must not be NULL
+INSERT INTO fresh VALUES (1, NULL)
+
+# NOT NULL on an added column is fine while the table is empty.
+statement ok
+ALTER TABLE fresh ADD COLUMN c TEXT NOT NULL
+
+statement ok
+INSERT INTO fresh VALUES (1, 2, 'x')
+
+# Dropping and re-adding a name in one statement leaves a fresh column: the
+# old values are gone.
+statement ok
+CREATE TABLE relabel (id INT, tag TEXT)
+
+statement ok
+INSERT INTO relabel VALUES (1, 'old')
+
+statement ok
+ALTER TABLE relabel DROP COLUMN tag, ADD COLUMN tag TEXT
+
+query
+SELECT id, tag FROM relabel
+----
+id|tag
+1|NULL
+
+# A rename in the middle of a list: later actions work on the new name.
+statement ok
+CREATE TABLE begin_name (x INT)
+
+statement ok
+INSERT INTO begin_name VALUES (9)
+
+statement ok
+ALTER TABLE begin_name RENAME TO end_name, ADD COLUMN y INT DEFAULT 1
+
+query
+SELECT x, y FROM end_name
+----
+x|y
+9|1
+
+statement error table "begin_name" does not exist
+SELECT * FROM begin_name
