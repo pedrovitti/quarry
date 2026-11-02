@@ -7,6 +7,10 @@ built to be read: each stage is a separate package with a narrow interface, and
 the whole pipeline is exercised by test files that state a query and the output
 it must produce.
 
+It is for anyone who wants to see how a SQL database works inside, such as
+students or engineers curious about query engines. It is not meant to hold
+real data.
+
 ```
 $ quarry
 quarry> CREATE TABLE customers (id INT NOT NULL, name TEXT, city TEXT, spend FLOAT);
@@ -40,16 +44,23 @@ materialize.
 
 ## What it does
 
-- `SELECT` with `DISTINCT`, `WHERE`, `ORDER BY`, `LIMIT` and `OFFSET`
+- `SELECT` with `DISTINCT`, `WHERE`, `GROUP BY`, `HAVING`, `ORDER BY`, `LIMIT`
+  and `OFFSET`
+- `count`, `sum`, `avg`, `min` and `max`
+- Subqueries: as a value, in `FROM` (including `LATERAL`), and correlated with
+  the query around them
+- `IN`, `NOT IN`, and comparisons quantified by `ANY` and `ALL`
 - Inner `JOIN`, including chains of them
-- `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `DROP TABLE`
-- `INT`, `BIGINT`, `FLOAT`, `TEXT`, `BOOL`, with `NOT NULL`
+- `INSERT`, `UPDATE`, `DELETE`, `CREATE TABLE`, `ALTER TABLE`, `DROP TABLE`
+- `INT`, `BIGINT`, `FLOAT`, `TEXT`, `BOOL`
+- `NOT NULL`, `PRIMARY KEY`, `UNIQUE`, `DEFAULT` and `CHECK`, checked on every
+  write
 - Three-valued logic: `NULL = NULL` is unknown, and unknown does not pass a
   filter
 - Around thirty scalar functions
 - `$1` parameters, and statements prepared once and run many times
 
-It does not do aggregates, subqueries, indexes or transactions.
+It does not do outer joins, indexes or transactions.
 
 ## Building
 
@@ -59,6 +70,14 @@ Everything runs in Docker; no local Go toolchain is needed.
     make test      # go test ./...
     make junit     # run the tests offline, writing report.xml
     make shell     # drop into the container
+
+To start the shell from inside the container:
+
+    go run ./cmd/quarry
+
+With Go 1.25 or later installed locally:
+
+    go install github.com/pedrovitti/quarry/cmd/quarry@latest
 
 ## Using it
 
@@ -96,3 +115,17 @@ iteration order would otherwise show up much later as an intermittent failure.
 
 Generates a table from a fixed seed and times each query shape, so two runs
 measure the same work.
+
+## Roadmap
+
+- [x] Aggregates, `GROUP BY` and `HAVING` (#1)
+- [x] Table constraints (#2)
+- [x] Subqueries, `IN` and `ANY`/`ALL` (#3)
+- [x] `ALTER TABLE` (#4)
+- [ ] Outer joins
+- [ ] Indexes
+- [ ] Transactions
+
+## License
+
+MIT, see [LICENSE](LICENSE).
