@@ -25,6 +25,10 @@ func Walk(n Node, visit Visitor) {
 			Walk(node.From, visit)
 		}
 		walkExpr(node.Where, visit)
+		for _, expr := range node.GroupBy {
+			Walk(expr, visit)
+		}
+		walkExpr(node.Having, visit)
 		for _, item := range node.OrderBy {
 			Walk(item.Expr, visit)
 		}

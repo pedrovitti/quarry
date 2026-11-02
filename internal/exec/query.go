@@ -23,6 +23,9 @@ func (e *Engine) buildSelect(stmt *ast.Select, params []types.Value) (Rows, erro
 	}
 
 	if stmt.Where != nil {
+		if err := rejectAggregates(stmt.Where, "WHERE"); err != nil {
+			return nil, err
+		}
 		predicate, err := CompilePredicate(stmt.Where, input.Binding(), params)
 		if err != nil {
 			return nil, err
@@ -30,8 +33,16 @@ func (e *Engine) buildSelect(stmt *ast.Select, params []types.Value) (Rows, erro
 		input = &filterOp{input: input, predicate: predicate}
 	}
 
+	var group *grouping
+	if isGrouped(stmt) {
+		input, group, err = buildGroup(stmt, input, params)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	source := input
-	exprs, columns, err := e.buildProjection(stmt.Columns, source.Binding(), params)
+	exprs, columns, err := e.buildProjection(stmt.Columns, source.Binding(), params, group)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +51,7 @@ func (e *Engine) buildSelect(stmt *ast.Select, params []types.Value) (Rows, erro
 	// ORDER BY may name a column that is not selected: "SELECT name FROM t
 	// ORDER BY city" is legal. Such a term is projected as an extra hidden
 	// column, sorted on, and trimmed off at the end.
-	keys, exprs, columns, err := resolveOrderBy(stmt, exprs, columns, source.Binding(), params)
+	keys, exprs, columns, err := resolveOrderBy(stmt, exprs, columns, source.Binding(), params, group)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +76,52 @@ func (e *Engine) buildSelect(stmt *ast.Select, params []types.Value) (Rows, erro
 	return input, nil
 }
 
+// isGrouped reports whether a select summarizes its input. Naming a group is
+// one way to ask for that; using an aggregate at all is the other, and then
+// the whole input is the only group there is.
+func isGrouped(stmt *ast.Select) bool {
+	if len(stmt.GroupBy) > 0 || stmt.Having != nil {
+		return true
+	}
+	for _, item := range stmt.Columns {
+		if hasAggregate(item.Expr) {
+			return true
+		}
+	}
+	for _, item := range stmt.OrderBy {
+		if hasAggregate(item.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildGroup stacks the grouping operator, and the HAVING that filters the
+// groups it produces, over an already filtered input.
+func buildGroup(stmt *ast.Select, input Rows, params []types.Value) (Rows, *grouping, error) {
+	group, err := buildGrouping(stmt, input.Binding(), params)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var rows Rows = &groupOp{
+		input:   input,
+		keys:    group.keys,
+		aggs:    group.aggs,
+		binding: group.binding,
+		whole:   len(group.keys) == 0,
+	}
+
+	if stmt.Having != nil {
+		_, compiled, err := group.compile(stmt.Having)
+		if err != nil {
+			return nil, nil, err
+		}
+		rows = &filterOp{input: rows, predicate: &Predicate{expr: compiled}}
+	}
+	return rows, group, nil
+}
+
 // resolveOrderBy compiles the sort terms, appending a hidden projected column
 // for any term that names something outside the select list.
 func resolveOrderBy(
@@ -73,6 +130,7 @@ func resolveOrderBy(
 	columns []ColumnInfo,
 	source *Binding,
 	params []types.Value,
+	group *grouping,
 ) ([]sortKey, []Expr, []ColumnInfo, error) {
 	if len(stmt.OrderBy) == 0 {
 		return nil, exprs, columns, nil
@@ -88,7 +146,7 @@ func resolveOrderBy(
 			continue
 		}
 
-		compiled, err := Compile(item.Expr, source, params)
+		compiled, err := compileAgainst(item.Expr, source, params, group)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -136,6 +194,10 @@ func (e *Engine) buildFrom(from ast.TableRef, params []types.Value) (Rows, error
 			return nil, err
 		}
 
+		if err := rejectAggregates(node.On, "ON"); err != nil {
+			return nil, err
+		}
+
 		// The inner side is read once and replayed for each outer row, so a
 		// join costs one scan of the right table rather than one per row.
 		buffered, err := Collect(right)
@@ -160,25 +222,39 @@ func (e *Engine) buildProjection(
 	items []ast.SelectItem,
 	binding *Binding,
 	params []types.Value,
+	group *grouping,
 ) ([]Expr, []ColumnInfo, error) {
 	var exprs []Expr
 	var columns []ColumnInfo
 
+	// A star covers the columns the query reads, not the ones a grouping
+	// produces, so it is expanded against the input either way and then held
+	// to the same rule as any other column.
+	expandable := binding
+	if group != nil {
+		expandable = group.source
+	}
+
 	for _, item := range items {
 		if star, ok := item.Expr.(*ast.Star); ok {
-			indexes, err := binding.ExpandStar(star.Table)
+			indexes, err := expandable.ExpandStar(star.Table)
 			if err != nil {
 				return nil, nil, err
 			}
 			for _, index := range indexes {
-				info := binding.Column(index)
-				exprs = append(exprs, columnExpr{index: index, kind: info.Kind})
+				info := expandable.Column(index)
+				ref := &ast.ColumnRef{Table: info.Table, Name: info.Name, Start: star.Pos()}
+				compiled, err := compileAgainst(ref, binding, params, group)
+				if err != nil {
+					return nil, nil, err
+				}
+				exprs = append(exprs, compiled)
 				columns = append(columns, info)
 			}
 			continue
 		}
 
-		compiled, err := Compile(item.Expr, binding, params)
+		compiled, err := compileAgainst(item.Expr, binding, params, group)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -186,6 +262,16 @@ func (e *Engine) buildProjection(
 		columns = append(columns, projectedColumn(item, compiled, binding))
 	}
 	return exprs, columns, nil
+}
+
+// compileAgainst compiles an expression over the rows below it, which are the
+// grouped rows when the query summarizes and the scanned ones when it does not.
+func compileAgainst(expr ast.Expr, binding *Binding, params []types.Value, group *grouping) (Expr, error) {
+	if group == nil {
+		return Compile(expr, binding, params)
+	}
+	_, compiled, err := group.compile(expr)
+	return compiled, err
 }
 
 // projectedColumn decides what an output column is called and whether it can
@@ -220,6 +306,12 @@ func projectedColumn(item ast.SelectItem, compiled Expr, binding *Binding) Colum
 func buildLimit(stmt *ast.Select, input Rows, params []types.Value) (Rows, error) {
 	if stmt.Limit == nil && stmt.Offset == nil {
 		return input, nil
+	}
+	if err := rejectAggregates(stmt.Limit, "LIMIT"); err != nil {
+		return nil, err
+	}
+	if err := rejectAggregates(stmt.Offset, "OFFSET"); err != nil {
+		return nil, err
 	}
 
 	limit, err := constantCount(stmt.Limit, "LIMIT", params)

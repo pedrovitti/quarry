@@ -1,0 +1,318 @@
+# The five aggregates, over the whole input. Grouping lives in grouping.test.
+
+statement ok
+CREATE TABLE readings (id INT NOT NULL, n INT, f FLOAT, s TEXT)
+
+statement ok
+INSERT INTO readings VALUES (1, 10, 1.5, 'apple'), (2, 20, 2.5, 'banana'), (3, NULL, NULL, NULL), (4, 6, 0.5, 'cherry')
+
+statement ok
+CREATE TABLE empty (a INT, b TEXT)
+
+statement ok
+CREATE TABLE nulls (a INT)
+
+statement ok
+INSERT INTO nulls VALUES (NULL), (NULL)
+
+statement ok
+CREATE TABLE pair (a INT)
+
+statement ok
+INSERT INTO pair VALUES (2), (3)
+
+# count(*) counts rows. count(x) counts the rows where x is not NULL, which is
+# the whole difference between them.
+query
+SELECT count(*) FROM readings
+----
+count(*)
+4
+
+query
+SELECT count(n) FROM readings
+----
+count(n)
+3
+
+query
+SELECT count(s) FROM readings
+----
+count(s)
+3
+
+query
+SELECT count(*), count(n), count(s) FROM readings
+----
+count(*)|count(n)|count(s)
+4|3|3
+
+# Every aggregate but count(*) skips NULL rather than poisoning the result.
+query
+SELECT sum(n), min(n), max(n) FROM readings
+----
+sum(n)|min(n)|max(n)
+36|6|20
+
+# A sum of integers is an integer. An average is not: 36 over 3 rows is 12.0,
+# and the decimal point is how the file tells the two apart.
+query
+SELECT avg(n) FROM readings
+----
+avg(n)
+12.0
+
+query
+SELECT avg(a) FROM pair
+----
+avg(a)
+2.5
+
+query
+SELECT sum(a) FROM pair
+----
+sum(a)
+5
+
+query
+SELECT sum(f), avg(f), min(f), max(f) FROM readings
+----
+sum(f)|avg(f)|min(f)|max(f)
+4.5|1.5|0.5|2.5
+
+# An integer sum widens the moment a float enters it.
+query
+SELECT sum(n + 0.5) FROM readings
+----
+sum(n + 0.5)
+37.5
+
+# min and max order text the way comparison does.
+query
+SELECT min(s), max(s) FROM readings
+----
+min(s)|max(s)
+apple|cherry
+
+query
+SELECT min(n > 8), max(n > 8) FROM readings
+----
+min(n > 8)|max(n > 8)
+false|true
+
+# An aggregate takes an expression, not just a column.
+query
+SELECT sum(n * 2), count(n + 1) FROM readings
+----
+sum(n * 2)|count(n + 1)
+72|3
+
+# And an aggregate is itself an expression, which is what count(*) inside
+# arithmetic has to mean.
+query
+SELECT count(*) + 1, sum(n) / count(n) FROM readings
+----
+count(*) + 1|sum(n) / count(n)
+5|12
+
+query
+SELECT abs(sum(n) - 40) FROM readings
+----
+abs(sum(n) - 40)
+4
+
+# WHERE runs before the aggregate, so it changes what is summarized.
+query
+SELECT count(*), sum(n) FROM readings WHERE n > 6
+----
+count(*)|sum(n)
+2|30
+
+query
+SELECT count(*) FROM readings WHERE n > 1000
+----
+count(*)
+0
+
+# No rows at all, and no GROUP BY: still exactly one row. count is 0 and every
+# other aggregate is NULL, because there was nothing to take a minimum of.
+query
+SELECT count(*) FROM empty
+----
+count(*)
+0
+
+query
+SELECT count(a), sum(a), avg(a), min(a), max(a) FROM empty
+----
+count(a)|sum(a)|avg(a)|min(a)|max(a)
+0|NULL|NULL|NULL|NULL
+
+query
+SELECT min(b), max(b) FROM empty
+----
+min(b)|max(b)
+NULL|NULL
+
+# Rows that are all NULL are the same story with a non-zero count(*).
+query
+SELECT count(*), count(a), sum(a), avg(a), min(a), max(a) FROM nulls
+----
+count(*)|count(a)|sum(a)|avg(a)|min(a)|max(a)
+2|0|NULL|NULL|NULL|NULL
+
+# A FROM-less select is one row, so it counts as one.
+query
+SELECT count(*)
+----
+count(*)
+1
+
+# Names are matched without regard to case, and the heading keeps what was
+# written, exactly as the scalar functions already do.
+query
+SELECT COUNT(*), Count(*), count(*) FROM readings
+----
+COUNT(*)|Count(*)|count(*)
+4|4|4
+
+query
+SELECT SUM(n) AS total FROM readings
+----
+total
+36
+
+# One argument is the aggregate. Two or more is the scalar that was already
+# there, and it has not moved.
+query
+SELECT min(n) FROM readings
+----
+min(n)
+6
+
+query
+SELECT min(3, 1, 2), max(3, 1, 2) FROM readings WHERE id = 1
+----
+min(3, 1, 2)|max(3, 1, 2)
+1|3
+
+query
+SELECT max(n), max(min(n), 100) FROM readings
+----
+max(n)|max(min(n), 100)
+20|100
+
+# A bare column beside an aggregate has no value, and that holds inside the
+# scalar of the same name: max(n, 100) would need one n per row.
+statement error column "n" must appear in GROUP BY or be used in an aggregate
+SELECT max(n), max(n, 100) FROM readings
+
+statement error min takes at least 2 arguments, got 0
+SELECT min() FROM readings
+
+statement error count takes 1 argument, got 0
+SELECT count() FROM readings
+
+statement error count takes 1 argument, got 2
+SELECT count(n, id) FROM readings
+
+statement error sum takes 1 argument, got 2
+SELECT sum(n, id) FROM readings
+
+statement error avg takes 1 argument, got 3
+SELECT avg(n, id, n) FROM readings
+
+# The star belongs to count and to nothing else.
+statement error * is only allowed in count(*)
+SELECT sum(*) FROM readings
+
+statement error * is only allowed in count(*)
+SELECT min(*) FROM readings
+
+statement error * is only allowed in count(*)
+SELECT count(*, n) FROM readings
+
+statement error * is only allowed in count(*)
+SELECT count(readings.*) FROM readings
+
+# The rules the star already obeyed are untouched.
+statement error * cannot appear inside an expression
+SELECT * + 1 FROM readings
+
+statement error * cannot be given an alias
+SELECT * AS everything FROM readings
+
+query
+SELECT * FROM readings WHERE id = 4
+----
+id|n|f|s
+4|6|0.5|cherry
+
+# sum and avg need numbers, and say so before reading a row.
+statement error sum needs a number, got TEXT
+SELECT sum(s) FROM readings
+
+statement error avg needs a number, got TEXT
+SELECT avg(s) FROM readings
+
+# min and max do not: they order whatever comparison orders.
+query
+SELECT min(s) FROM readings WHERE s IS NOT NULL
+----
+min(s)
+apple
+
+# An aggregate cannot contain another one.
+statement error an aggregate must not contain another aggregate
+SELECT sum(count(n)) FROM readings
+
+statement error an aggregate must not contain another aggregate
+SELECT count(min(n) + 1) FROM readings
+
+# But a scalar inside an aggregate, and an aggregate inside a scalar, are both
+# ordinary nesting.
+query
+SELECT sum(abs(n)), length(min(s)) FROM readings
+----
+sum(abs(n))|length(min(s))
+36|5
+
+# WHERE is decided before there is anything to aggregate.
+statement error an aggregate is not allowed in WHERE
+SELECT count(*) FROM readings WHERE count(*) > 1
+
+statement error an aggregate is not allowed in WHERE
+SELECT id FROM readings WHERE sum(n) > 1
+
+statement error an aggregate is not allowed in LIMIT
+SELECT count(*) FROM readings LIMIT count(*)
+
+statement error an aggregate is not allowed in OFFSET
+SELECT count(*) FROM readings OFFSET count(*)
+
+statement error an aggregate is not allowed in ON
+SELECT count(*) FROM readings JOIN nulls ON count(*) = 1
+
+# Once anything is aggregated, a bare column has no single value to show.
+statement error column "id" must appear in GROUP BY or be used in an aggregate
+SELECT id, count(*) FROM readings
+
+statement error column "n" must appear in GROUP BY or be used in an aggregate
+SELECT n FROM readings ORDER BY count(*)
+
+statement error column "id" must appear in GROUP BY or be used in an aggregate
+SELECT * FROM readings ORDER BY sum(n)
+
+# Nothing above changed what an unaggregated query does.
+query
+SELECT id, n FROM readings WHERE id < 3
+----
+id|n
+1|10
+2|20
+
+query
+SELECT count(*) FROM readings WHERE s IS NULL
+----
+count(*)
+1

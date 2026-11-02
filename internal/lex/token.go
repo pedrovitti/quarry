@@ -51,6 +51,8 @@ const (
 	Drop
 	False
 	From
+	Group
+	Having
 	Insert
 	Into
 	Is
@@ -113,6 +115,8 @@ var kindNames = map[Kind]string{
 	Drop:     "DROP",
 	False:    "FALSE",
 	From:     "FROM",
+	Group:    "GROUP",
+	Having:   "HAVING",
 	Insert:   "INSERT",
 	Into:     "INTO",
 	Is:       "IS",

@@ -8,6 +8,8 @@ type Select struct {
 	Columns  []SelectItem
 	From     TableRef // nil for a FROM-less select such as SELECT 1
 	Where    Expr     // nil when absent
+	GroupBy  []Expr
+	Having   Expr // nil when absent
 	OrderBy  []OrderItem
 	Limit    Expr // nil when absent
 	Offset   Expr // nil when absent
