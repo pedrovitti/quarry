@@ -25,17 +25,29 @@ func (e *Engine) runInsert(stmt *ast.Insert, params []types.Value) (*Result, err
 	// Values are compiled against an empty binding: an INSERT has no row to
 	// read columns from, so "INSERT INTO t VALUES (a)" is a missing-column
 	// error rather than a reference to the row being written.
-	empty := NewBinding(nil)
+	empty := e.scope(NewBinding(nil), nil)
+
+	// The columns the statement does not name are the same in every row, so
+	// what they hold is worked out once.
+	template := defaultRow(table.Schema, targets)
 
 	// Every row is built before any is stored, so a bad value in the last row
 	// does not leave the earlier ones written.
 	built := make([]storage.Row, 0, len(stmt.Rows))
 	for _, values := range stmt.Rows {
-		row, err := e.buildInsertRow(values, targets, table.Schema, empty, params)
+		row, err := e.buildInsertRow(values, targets, table.Schema, template, empty, params)
 		if err != nil {
 			return nil, err
 		}
 		built = append(built, row)
+	}
+
+	compiled, err := compileConstraints(table)
+	if err != nil {
+		return nil, err
+	}
+	if err := compiled.enforce(heap, built, nil); err != nil {
+		return nil, err
 	}
 
 	for _, row := range built {
@@ -78,11 +90,12 @@ func insertTargets(stmt *ast.Insert, schema *catalog.Schema) ([]int, error) {
 }
 
 // buildInsertRow evaluates one VALUES tuple into a full row, filling
-// unmentioned columns with NULL and checking types and NOT NULL.
+// unmentioned columns from the template and checking types and NOT NULL.
 func (e *Engine) buildInsertRow(
 	values []ast.Expr,
 	targets []int,
 	schema *catalog.Schema,
+	template storage.Row,
 	binding *Binding,
 	params []types.Value,
 ) (storage.Row, error) {
@@ -90,9 +103,10 @@ func (e *Engine) buildInsertRow(
 		return nil, errorf("%d values given for %d columns", len(values), len(targets))
 	}
 
-	// The zero Value is NULL, so a column nobody names is NULL rather than a
-	// zero of its declared type.
-	row := make(storage.Row, schema.Len())
+	// The template holds the default of every column this statement does not
+	// name, and the zero Value, which is NULL, for the rest. Naming a column
+	// is what turns its default off, so a NULL written on purpose stays NULL.
+	row := template.Clone()
 
 	for i, expr := range values {
 		compiled, err := Compile(expr, binding, params)
@@ -159,7 +173,7 @@ func (e *Engine) runUpdate(stmt *ast.Update, params []types.Value) (*Result, err
 		seen[index] = true
 		assignments[i] = index
 
-		compiled, err := Compile(set.Value, binding, params)
+		compiled, err := Compile(set.Value, e.scope(binding, nil), params)
 		if err != nil {
 			return nil, err
 		}
@@ -168,7 +182,7 @@ func (e *Engine) runUpdate(stmt *ast.Update, params []types.Value) (*Result, err
 
 	var predicate *Predicate
 	if stmt.Where != nil {
-		predicate, err = CompilePredicate(stmt.Where, binding, params)
+		predicate, err = CompilePredicate(stmt.Where, e.scope(binding, nil), params)
 		if err != nil {
 			return nil, err
 		}
@@ -211,6 +225,22 @@ func (e *Engine) runUpdate(stmt *ast.Update, params []types.Value) (*Result, err
 		updates = append(updates, pending{id: cursor.RowID(), row: next})
 	}
 
+	compiled, err := compileConstraints(table)
+	if err != nil {
+		return nil, err
+	}
+	// A changed row is compared against every row but the one it came from,
+	// so writing a key back over itself is not a duplicate of itself.
+	replaced := make(map[storage.RowID]bool, len(updates))
+	changed := make([]storage.Row, len(updates))
+	for i, update := range updates {
+		replaced[update.id] = true
+		changed[i] = update.row
+	}
+	if err := compiled.enforce(heap, changed, replaced); err != nil {
+		return nil, err
+	}
+
 	for _, update := range updates {
 		if err := heap.Update(update.id, update.row); err != nil {
 			return nil, errorf("%s", err)
@@ -231,7 +261,7 @@ func (e *Engine) runDelete(stmt *ast.Delete, params []types.Value) (*Result, err
 
 	var predicate *Predicate
 	if stmt.Where != nil {
-		predicate, err = CompilePredicate(stmt.Where, bindingForTable(table), params)
+		predicate, err = CompilePredicate(stmt.Where, e.scope(bindingForTable(table), nil), params)
 		if err != nil {
 			return nil, err
 		}

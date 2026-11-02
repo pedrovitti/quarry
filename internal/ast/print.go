@@ -77,7 +77,33 @@ func (i *IsNullExpr) String() string {
 	return i.Operand.String() + " IS NULL"
 }
 
+func predicateKeyword(negated bool, word string) string {
+	if negated {
+		return " NOT " + word + " "
+	}
+	return " " + word + " "
+}
+
+func (i *InExpr) String() string {
+	return i.Operand.String() + predicateKeyword(i.Negated, "IN") + "(" + joinExprs(i.List) + ")"
+}
+
+func (q *QuantifiedExpr) String() string {
+	return q.Operand.String() + " " + q.Op.String() + " " + q.Quantifier.String() +
+		" (" + joinExprs(q.List) + ")"
+}
+
+func joinExprs(list []Expr) string {
+	parts := make([]string, len(list))
+	for n, item := range list {
+		parts[n] = item.String()
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (p *ParenExpr) String() string { return "(" + p.Inner.String() + ")" }
+
+func (s *SubqueryExpr) String() string { return s.Select.String() }
 
 func (i SelectItem) String() string {
 	if i.Alias == "" {
@@ -98,6 +124,14 @@ func (t *TableName) String() string {
 		return QuoteIdent(t.Name)
 	}
 	return QuoteIdent(t.Name) + " AS " + QuoteIdent(t.Alias)
+}
+
+func (s *SubqueryTable) String() string {
+	out := "(" + s.Select.String() + ") AS " + QuoteIdent(s.Alias)
+	if s.Lateral {
+		return "LATERAL " + out
+	}
+	return out
 }
 
 func (j *Join) String() string {
@@ -123,6 +157,19 @@ func (s *Select) String() string {
 	if s.Where != nil {
 		sb.WriteString(" WHERE ")
 		sb.WriteString(s.Where.String())
+	}
+	if len(s.GroupBy) > 0 {
+		sb.WriteString(" GROUP BY ")
+		for i, expr := range s.GroupBy {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			sb.WriteString(expr.String())
+		}
+	}
+	if s.Having != nil {
+		sb.WriteString(" HAVING ")
+		sb.WriteString(s.Having.String())
 	}
 	if len(s.OrderBy) > 0 {
 		sb.WriteString(" ORDER BY ")
@@ -205,20 +252,45 @@ func (d *Delete) String() string {
 	return out
 }
 
+// String renders the column with its constraints in one fixed order, whatever
+// order they were written in, so that two declarations meaning the same thing
+// print the same way.
 func (c ColumnDef) String() string {
 	out := QuoteIdent(c.Name) + " " + c.Type.String()
 	if c.NotNull {
 		out += " NOT NULL"
 	}
+	if c.PrimaryKey {
+		out += " PRIMARY KEY"
+	}
+	if c.Unique {
+		out += " UNIQUE"
+	}
+	if c.Default != nil {
+		out += " DEFAULT " + c.Default.String()
+	}
+	if c.Check != nil {
+		out += " CHECK (" + c.Check.String() + ")"
+	}
 	return out
 }
 
-func (c *CreateTable) String() string {
-	cols := make([]string, len(c.Columns))
-	for i, col := range c.Columns {
-		cols[i] = col.String()
+func (c TableConstraint) String() string {
+	if c.Kind == CheckConstraint {
+		return "CHECK (" + c.Expr.String() + ")"
 	}
-	return "CREATE TABLE " + QuoteIdent(c.Name) + " (" + strings.Join(cols, ", ") + ")"
+	return c.Kind.String() + " (" + strings.Join(quoteAll(c.Columns), ", ") + ")"
+}
+
+func (c *CreateTable) String() string {
+	items := make([]string, 0, len(c.Columns)+len(c.Constraints))
+	for _, col := range c.Columns {
+		items = append(items, col.String())
+	}
+	for _, constraint := range c.Constraints {
+		items = append(items, constraint.String())
+	}
+	return "CREATE TABLE " + QuoteIdent(c.Name) + " (" + strings.Join(items, ", ") + ")"
 }
 
 func (d *DropTable) String() string { return "DROP TABLE " + QuoteIdent(d.Name) }

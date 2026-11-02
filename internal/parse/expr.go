@@ -2,6 +2,7 @@ package parse
 
 import (
 	"strconv"
+	"strings"
 
 	"github.com/pedrovitti/quarry/internal/ast"
 	"github.com/pedrovitti/quarry/internal/lex"
@@ -27,9 +28,19 @@ func (p *Parser) parseBinary(min precedence) (ast.Expr, error) {
 			return left, nil
 		}
 
-		// IS is postfix, not infix: it takes NULL rather than an expression.
+		// IS is postfix, not infix: it takes NULL or DISTINCT FROM rather
+		// than an expression.
 		if p.at(lex.Is) {
-			left, err = p.parseIsNull(left)
+			left, err = p.parseIs(left)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
+
+		switch p.tok.Kind {
+		case lex.Not, lex.In:
+			left, err = p.parsePredicate(left)
 			if err != nil {
 				return nil, err
 			}
@@ -41,6 +52,14 @@ func (p *Parser) parseBinary(min precedence) (ast.Expr, error) {
 			return nil, unexpected(p.tok, "an operator")
 		}
 		p.next()
+
+		if op.IsComparison() && (p.at(lex.Any) || p.at(lex.All)) {
+			left, err = p.parseQuantified(left, op)
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
 
 		right, err := p.parseBinary(prec)
 		if err != nil {
@@ -78,11 +97,10 @@ func (p *Parser) parsePrefix() (ast.Expr, error) {
 	return p.parsePrimary()
 }
 
-// parseIsNull parses the postfix "IS NULL" and "IS NOT NULL" on an operand
-// that has already been read. The cursor is on IS.
-func (p *Parser) parseIsNull(operand ast.Expr) (ast.Expr, error) {
+func (p *Parser) parseIs(operand ast.Expr) (ast.Expr, error) {
 	p.next() // IS
 	negated := p.accept(lex.Not)
+
 	if _, err := p.expect(lex.Null); err != nil {
 		if negated {
 			return nil, unexpected(p.tok, "NULL after IS NOT")
@@ -90,6 +108,77 @@ func (p *Parser) parseIsNull(operand ast.Expr) (ast.Expr, error) {
 		return nil, unexpected(p.tok, "NULL or NOT NULL after IS")
 	}
 	return &ast.IsNullExpr{Operand: operand, Negated: negated}, nil
+}
+
+func (p *Parser) parsePredicate(operand ast.Expr) (ast.Expr, error) {
+	negated := p.accept(lex.Not)
+
+	if p.at(lex.In) {
+		return p.parseIn(operand, negated)
+	}
+	return nil, unexpected(p.tok, "IN after NOT")
+}
+
+func (p *Parser) parseIn(operand ast.Expr, negated bool) (ast.Expr, error) {
+	list, err := p.parseValueList("IN")
+	if err != nil {
+		return nil, err
+	}
+	return &ast.InExpr{Operand: operand, List: list, Negated: negated}, nil
+}
+
+func (p *Parser) parseValueList(word string) ([]ast.Expr, error) {
+	pos := p.tok.Pos
+	p.next() // IN, ANY or ALL
+
+	if !p.accept(lex.LParen) {
+		return nil, unexpected(p.tok, "a list in parentheses after "+word)
+	}
+	if p.at(lex.Select) {
+		sub, err := p.parseSubquery()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := p.expect(lex.RParen); err != nil {
+			return nil, unexpected(p.tok, "a closing parenthesis after the subquery")
+		}
+		return []ast.Expr{sub}, nil
+	}
+	if p.at(lex.RParen) {
+		return nil, errorf(pos, "%s needs at least one value", word)
+	}
+
+	var list []ast.Expr
+	for {
+		item, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		list = append(list, item)
+		if !p.accept(lex.Comma) {
+			break
+		}
+	}
+	if _, err := p.expect(lex.RParen); err != nil {
+		return nil, unexpected(p.tok, "a comma or a closing parenthesis")
+	}
+	return list, nil
+}
+
+func (p *Parser) parseQuantified(operand ast.Expr, op ast.BinaryOp) (ast.Expr, error) {
+	quantifier := quantifierOf(p.tok.Kind)
+	list, err := p.parseValueList(quantifier.String())
+	if err != nil {
+		return nil, err
+	}
+	return &ast.QuantifiedExpr{Operand: operand, Op: op, Quantifier: quantifier, List: list}, nil
+}
+
+func quantifierOf(kind lex.Kind) ast.Quantifier {
+	if kind == lex.All {
+		return ast.AllOf
+	}
+	return ast.AnyOf
 }
 
 // parsePrimary parses a literal, a parenthesized expression, a column
@@ -134,6 +223,16 @@ func (p *Parser) parsePrimary() (ast.Expr, error) {
 
 	case lex.LParen:
 		p.next()
+		if p.at(lex.Select) {
+			sub, err := p.parseSubquery()
+			if err != nil {
+				return nil, err
+			}
+			if _, err := p.expect(lex.RParen); err != nil {
+				return nil, unexpected(p.tok, "a closing parenthesis after the subquery")
+			}
+			return &ast.ParenExpr{Inner: sub, Start: tok.Pos}, nil
+		}
 		inner, err := p.parseExpr()
 		if err != nil {
 			return nil, err
@@ -188,7 +287,13 @@ func (p *Parser) parseCallArgs(name lex.Token) (ast.Expr, error) {
 		return call, nil
 	}
 	for {
+		// count(*) is a call over whole rows rather than over a value, so an
+		// argument list is the one place outside a select item where a star is
+		// an expression at all.
+		restore := p.starOK
+		p.starOK = true
 		arg, err := p.parseExpr()
+		p.starOK = restore
 		if err != nil {
 			return nil, err
 		}
@@ -200,5 +305,41 @@ func (p *Parser) parseCallArgs(name lex.Token) (ast.Expr, error) {
 	if _, err := p.expect(lex.RParen); err != nil {
 		return nil, unexpected(p.tok, "a comma or a closing parenthesis")
 	}
+	if err := checkCallStars(call); err != nil {
+		return nil, err
+	}
 	return call, nil
+}
+
+// checkCallStars holds a star to count(*): unqualified, alone, and only there.
+func checkCallStars(call *ast.FuncCall) error {
+	for _, arg := range call.Args {
+		star, ok := arg.(*ast.Star)
+		if !ok {
+			for _, node := range ast.Inspect(arg, isStar) {
+				return errorf(node.Pos(), "* cannot appear inside an expression")
+			}
+			continue
+		}
+		if star.Table != "" || len(call.Args) != 1 || !strings.EqualFold(call.Name, "count") {
+			return errorf(star.Pos(), "* is only allowed in count(*)")
+		}
+	}
+	return nil
+}
+
+func isStar(n ast.Node) bool {
+	_, ok := n.(*ast.Star)
+	return ok
+}
+
+// parseSubquery parses a SELECT standing where a value stands. The cursor is
+// on SELECT and the caller owns the parentheses around it.
+func (p *Parser) parseSubquery() (ast.Expr, error) {
+	pos := p.tok.Pos
+	stmt, err := p.parseSelect()
+	if err != nil {
+		return nil, err
+	}
+	return &ast.SubqueryExpr{Select: stmt.(*ast.Select), Start: pos}, nil
 }

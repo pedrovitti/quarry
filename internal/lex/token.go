@@ -41,11 +41,14 @@ const (
 	keywordBegin
 
 	Add
+	All
 	Alter
 	And
+	Any
 	As
 	Asc
 	By
+	Check
 	Column
 	Create
 	Default
@@ -55,10 +58,15 @@ const (
 	Drop
 	False
 	From
+	Group
+	Having
+	In
 	Insert
 	Into
 	Is
 	Join
+	Key
+	Lateral
 	Limit
 	Not
 	Null
@@ -66,6 +74,7 @@ const (
 	On
 	Or
 	Order
+	Primary
 	Rename
 	Select
 	Set
@@ -73,6 +82,7 @@ const (
 	To
 	True
 	Type
+	Unique
 	Update
 	Using
 	Values
@@ -111,11 +121,14 @@ var kindNames = map[Kind]string{
 	Dot:       ".",
 
 	Add:      "ADD",
+	All:      "ALL",
 	Alter:    "ALTER",
 	And:      "AND",
+	Any:      "ANY",
 	As:       "AS",
 	Asc:      "ASC",
 	By:       "BY",
+	Check:    "CHECK",
 	Column:   "COLUMN",
 	Create:   "CREATE",
 	Default:  "DEFAULT",
@@ -125,10 +138,15 @@ var kindNames = map[Kind]string{
 	Drop:     "DROP",
 	False:    "FALSE",
 	From:     "FROM",
+	Group:    "GROUP",
+	Having:   "HAVING",
+	In:       "IN",
 	Insert:   "INSERT",
 	Into:     "INTO",
 	Is:       "IS",
 	Join:     "JOIN",
+	Key:      "KEY",
+	Lateral:  "LATERAL",
 	Limit:    "LIMIT",
 	Not:      "NOT",
 	Null:     "NULL",
@@ -136,6 +154,7 @@ var kindNames = map[Kind]string{
 	On:       "ON",
 	Or:       "OR",
 	Order:    "ORDER",
+	Primary:  "PRIMARY",
 	Rename:   "RENAME",
 	Select:   "SELECT",
 	Set:      "SET",
@@ -143,6 +162,7 @@ var kindNames = map[Kind]string{
 	To:       "TO",
 	True:     "TRUE",
 	Type:     "TYPE",
+	Unique:   "UNIQUE",
 	Update:   "UPDATE",
 	Using:    "USING",
 	Values:   "VALUES",

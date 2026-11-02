@@ -17,21 +17,41 @@ const noLimit int64 = -1
 // DISTINCT, then ORDER BY, then LIMIT. Sorting after projection is what lets
 // "ORDER BY" name an output alias.
 func (e *Engine) buildSelect(stmt *ast.Select, params []types.Value) (Rows, error) {
-	input, err := e.buildFrom(stmt.From, params)
+	return e.buildSelectIn(stmt, params, nil)
+}
+
+// buildSelectIn assembles a SELECT that may sit inside another one. Everything
+// it compiles resolves against its own columns first and the enclosing scope
+// after, which is what lets an inner query name an outer column.
+func (e *Engine) buildSelectIn(stmt *ast.Select, params []types.Value, outer *Binding) (Rows, error) {
+	input, err := e.buildFrom(stmt.From, params, outer)
 	if err != nil {
 		return nil, err
 	}
+	scope := e.scope(input.Binding(), outer)
 
 	if stmt.Where != nil {
-		predicate, err := CompilePredicate(stmt.Where, input.Binding(), params)
+		if err := rejectAggregates(stmt.Where, "WHERE"); err != nil {
+			return nil, err
+		}
+		predicate, err := CompilePredicate(stmt.Where, scope, params)
 		if err != nil {
 			return nil, err
 		}
 		input = &filterOp{input: input, predicate: predicate}
 	}
 
+	var group *grouping
+	if isGrouped(stmt) {
+		input, group, err = e.buildGroup(stmt, input, scope, outer, params)
+		if err != nil {
+			return nil, err
+		}
+		scope = group.binding
+	}
+
 	source := input
-	exprs, columns, err := e.buildProjection(stmt.Columns, source.Binding(), params)
+	exprs, columns, err := e.buildProjection(stmt.Columns, scope, params, group)
 	if err != nil {
 		return nil, err
 	}
@@ -40,7 +60,7 @@ func (e *Engine) buildSelect(stmt *ast.Select, params []types.Value) (Rows, erro
 	// ORDER BY may name a column that is not selected: "SELECT name FROM t
 	// ORDER BY city" is legal. Such a term is projected as an extra hidden
 	// column, sorted on, and trimmed off at the end.
-	keys, exprs, columns, err := resolveOrderBy(stmt, exprs, columns, source.Binding(), params)
+	keys, exprs, columns, err := resolveOrderBy(stmt, exprs, columns, scope, params, group)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +85,53 @@ func (e *Engine) buildSelect(stmt *ast.Select, params []types.Value) (Rows, erro
 	return input, nil
 }
 
+// isGrouped reports whether a select summarizes its input. Naming a group is
+// one way to ask for that; using an aggregate at all is the other, and then
+// the whole input is the only group there is.
+func isGrouped(stmt *ast.Select) bool {
+	if len(stmt.GroupBy) > 0 || stmt.Having != nil {
+		return true
+	}
+	for _, item := range stmt.Columns {
+		if hasAggregate(item.Expr) {
+			return true
+		}
+	}
+	for _, item := range stmt.OrderBy {
+		if hasAggregate(item.Expr) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildGroup stacks the grouping operator, and the HAVING that filters the
+// groups it produces, over an already filtered input.
+func (e *Engine) buildGroup(stmt *ast.Select, input Rows, scope, outer *Binding, params []types.Value) (Rows, *grouping, error) {
+	group, err := buildGrouping(stmt, scope, params)
+	if err != nil {
+		return nil, nil, err
+	}
+	group.binding = e.scope(group.binding, outer)
+
+	var rows Rows = &groupOp{
+		input:   input,
+		keys:    group.keys,
+		aggs:    group.aggs,
+		binding: group.binding,
+		whole:   len(group.keys) == 0,
+	}
+
+	if stmt.Having != nil {
+		_, compiled, err := group.compile(stmt.Having)
+		if err != nil {
+			return nil, nil, err
+		}
+		rows = &filterOp{input: rows, predicate: &Predicate{expr: compiled}}
+	}
+	return rows, group, nil
+}
+
 // resolveOrderBy compiles the sort terms, appending a hidden projected column
 // for any term that names something outside the select list.
 func resolveOrderBy(
@@ -73,6 +140,7 @@ func resolveOrderBy(
 	columns []ColumnInfo,
 	source *Binding,
 	params []types.Value,
+	group *grouping,
 ) ([]sortKey, []Expr, []ColumnInfo, error) {
 	if len(stmt.OrderBy) == 0 {
 		return nil, exprs, columns, nil
@@ -88,7 +156,7 @@ func resolveOrderBy(
 			continue
 		}
 
-		compiled, err := Compile(item.Expr, source, params)
+		compiled, err := compileAgainst(item.Expr, source, params, group)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -109,7 +177,16 @@ func resolveOrderBy(
 
 // buildFrom turns a FROM clause into a stream. A missing FROM yields one
 // empty row, so "SELECT 1" projects over it and returns a single value.
-func (e *Engine) buildFrom(from ast.TableRef, params []types.Value) (Rows, error) {
+// scope wraps a binding so that expressions compiled against it can reach the
+// engine, to plan a subquery, and the query around it, to name its columns.
+func (e *Engine) scope(b *Binding, outer *Binding) *Binding {
+	if outer == nil {
+		return &Binding{columns: b.columns, engine: e}
+	}
+	return outer.inside(b)
+}
+
+func (e *Engine) buildFrom(from ast.TableRef, params []types.Value, outer *Binding) (Rows, error) {
 	if from == nil {
 		return newSingleRow(), nil
 	}
@@ -126,13 +203,33 @@ func (e *Engine) buildFrom(from ast.TableRef, params []types.Value) (Rows, error
 		}
 		return newScan(heap, BindingFor(node.Ref(), table.Schema)), nil
 
-	case *ast.Join:
-		left, err := e.buildFrom(node.Left, params)
+	case *ast.SubqueryTable:
+		// The inner query is planned with no enclosing scope: a subquery in
+		// FROM never reads the statement around it.
+		inner, err := e.buildSelectIn(node.Select, params, nil)
 		if err != nil {
 			return nil, err
 		}
-		right, err := e.buildFrom(node.Right, params)
+		columns := inner.Binding().Columns()
+		for i := range columns {
+			columns[i].Table = node.Alias
+		}
+		return &rebindOp{input: inner, binding: NewBinding(columns)}, nil
+
+	case *ast.Join:
+		left, err := e.buildFrom(node.Left, params, outer)
 		if err != nil {
+			return nil, err
+		}
+		if sub, ok := node.Right.(*ast.SubqueryTable); ok && sub.Lateral {
+			return e.buildLateralJoin(node, left, sub, params, outer)
+		}
+		right, err := e.buildFrom(node.Right, params, outer)
+		if err != nil {
+			return nil, err
+		}
+
+		if err := rejectAggregates(node.On, "ON"); err != nil {
 			return nil, err
 		}
 
@@ -144,13 +241,52 @@ func (e *Engine) buildFrom(from ast.TableRef, params []types.Value) (Rows, error
 		}
 
 		binding := left.Binding().Concat(right.Binding())
-		predicate, err := CompilePredicate(node.On, binding, params)
+		predicate, err := CompilePredicate(node.On, e.scope(binding, outer), params)
 		if err != nil {
 			return nil, err
 		}
 		return &nestedLoopOp{left: left, right: buffered, predicate: predicate, binding: binding}, nil
 	}
 	return nil, errorf("cannot read from this kind of source")
+}
+
+// buildLateralJoin joins left to a subquery marked LATERAL, whose inner query
+// reads the columns of everything joined before it. Its rows depend on the
+// current left row, so the right side cannot be read once and replayed: the
+// inner plan is rebuilt for each left row, with that row's values fixed in
+// the scope the plan resolves those columns against.
+func (e *Engine) buildLateralJoin(
+	node *ast.Join,
+	left Rows,
+	sub *ast.SubqueryTable,
+	params []types.Value,
+	outer *Binding,
+) (Rows, error) {
+	before := &Binding{columns: left.Binding().columns, engine: e}
+	inner, err := e.buildSelectIn(sub.Select, params, before)
+	if err != nil {
+		return nil, err
+	}
+	if before.cell == nil {
+		before.cell = &rowCell{}
+	}
+	columns := inner.Binding().Columns()
+	for i := range columns {
+		columns[i].Table = sub.Alias
+	}
+
+	binding := left.Binding().Concat(NewBinding(columns))
+	predicate, err := CompilePredicate(node.On, e.scope(binding, outer), params)
+	if err != nil {
+		return nil, err
+	}
+	return &lateralJoinOp{
+		left:      left,
+		rebuild:   func() (Rows, error) { return e.buildSelectIn(sub.Select, params, before) },
+		cell:      before.cell,
+		predicate: predicate,
+		binding:   binding,
+	}, nil
 }
 
 // buildProjection compiles the select list, expanding stars against the input
@@ -160,25 +296,39 @@ func (e *Engine) buildProjection(
 	items []ast.SelectItem,
 	binding *Binding,
 	params []types.Value,
+	group *grouping,
 ) ([]Expr, []ColumnInfo, error) {
 	var exprs []Expr
 	var columns []ColumnInfo
 
+	// A star covers the columns the query reads, not the ones a grouping
+	// produces, so it is expanded against the input either way and then held
+	// to the same rule as any other column.
+	expandable := binding
+	if group != nil {
+		expandable = group.source
+	}
+
 	for _, item := range items {
 		if star, ok := item.Expr.(*ast.Star); ok {
-			indexes, err := binding.ExpandStar(star.Table)
+			indexes, err := expandable.ExpandStar(star.Table)
 			if err != nil {
 				return nil, nil, err
 			}
 			for _, index := range indexes {
-				info := binding.Column(index)
-				exprs = append(exprs, columnExpr{index: index, kind: info.Kind})
+				info := expandable.Column(index)
+				ref := &ast.ColumnRef{Table: info.Table, Name: info.Name, Start: star.Pos()}
+				compiled, err := compileAgainst(ref, binding, params, group)
+				if err != nil {
+					return nil, nil, err
+				}
+				exprs = append(exprs, compiled)
 				columns = append(columns, info)
 			}
 			continue
 		}
 
-		compiled, err := Compile(item.Expr, binding, params)
+		compiled, err := compileAgainst(item.Expr, binding, params, group)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -186,6 +336,16 @@ func (e *Engine) buildProjection(
 		columns = append(columns, projectedColumn(item, compiled, binding))
 	}
 	return exprs, columns, nil
+}
+
+// compileAgainst compiles an expression over the rows below it, which are the
+// grouped rows when the query summarizes and the scanned ones when it does not.
+func compileAgainst(expr ast.Expr, binding *Binding, params []types.Value, group *grouping) (Expr, error) {
+	if group == nil {
+		return Compile(expr, binding, params)
+	}
+	_, compiled, err := group.compile(expr)
+	return compiled, err
 }
 
 // projectedColumn decides what an output column is called and whether it can
@@ -220,6 +380,12 @@ func projectedColumn(item ast.SelectItem, compiled Expr, binding *Binding) Colum
 func buildLimit(stmt *ast.Select, input Rows, params []types.Value) (Rows, error) {
 	if stmt.Limit == nil && stmt.Offset == nil {
 		return input, nil
+	}
+	if err := rejectAggregates(stmt.Limit, "LIMIT"); err != nil {
+		return nil, err
+	}
+	if err := rejectAggregates(stmt.Offset, "OFFSET"); err != nil {
+		return nil, err
 	}
 
 	limit, err := constantCount(stmt.Limit, "LIMIT", params)

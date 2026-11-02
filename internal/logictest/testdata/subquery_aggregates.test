@@ -1,0 +1,50 @@
+# Aggregates and subqueries together. A subquery is a query of its own: its
+# aggregates and columns belong to it, not to the query it stands in.
+
+statement ok
+CREATE TABLE c (id INT NOT NULL, city TEXT, spend FLOAT)
+
+statement ok
+INSERT INTO c VALUES (1, 'london', 10), (2, 'paris', 20), (3, 'london', 30)
+
+# The average is the subquery's aggregate, so the WHERE around it has none.
+query
+SELECT id FROM c WHERE spend > (SELECT avg(spend) FROM c) ORDER BY id
+----
+id
+3
+
+# A count inside a correlated subquery does not make the outer query grouped.
+query
+SELECT id, (SELECT count(*) FROM c AS d WHERE d.city = c.city) AS n FROM c ORDER BY id
+----
+id|n
+1|2
+2|1
+3|2
+
+# HAVING may compare a group against a subquery, whose columns are not the
+# group's to account for.
+query
+SELECT city, count(*) AS k FROM c GROUP BY city HAVING sum(spend) > (SELECT max(spend) FROM c WHERE city = 'paris') ORDER BY city
+----
+city|k
+london|2
+
+query
+SELECT city FROM c GROUP BY city HAVING sum(spend) IN (40, 1) ORDER BY city
+----
+city
+london
+
+query
+SELECT city FROM c GROUP BY city HAVING sum(spend) = ANY (SELECT spend FROM c WHERE id = 2) ORDER BY city
+----
+city
+paris
+
+statement error an aggregate is not allowed in WHERE
+SELECT id FROM c WHERE sum(spend) > 1
+
+statement error column "spend" must appear in GROUP BY or be used in an aggregate
+SELECT city FROM c GROUP BY city HAVING spend IN (1, 2)

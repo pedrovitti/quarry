@@ -25,6 +25,10 @@ func Walk(n Node, visit Visitor) {
 			Walk(node.From, visit)
 		}
 		walkExpr(node.Where, visit)
+		for _, expr := range node.GroupBy {
+			Walk(expr, visit)
+		}
+		walkExpr(node.Having, visit)
 		for _, item := range node.OrderBy {
 			Walk(item.Expr, visit)
 		}
@@ -47,6 +51,18 @@ func Walk(n Node, visit Visitor) {
 	case *Delete:
 		walkExpr(node.Where, visit)
 
+	case *CreateTable:
+		for _, column := range node.Columns {
+			walkExpr(column.Default, visit)
+			walkExpr(column.Check, visit)
+		}
+		for _, constraint := range node.Constraints {
+			walkExpr(constraint.Expr, visit)
+		}
+
+	case *SubqueryTable:
+		Walk(node.Select, visit)
+
 	case *Join:
 		Walk(node.Left, visit)
 		Walk(node.Right, visit)
@@ -67,6 +83,21 @@ func Walk(n Node, visit Visitor) {
 	case *IsNullExpr:
 		Walk(node.Operand, visit)
 
+	case *SubqueryExpr:
+		Walk(node.Select, visit)
+
+	case *InExpr:
+		Walk(node.Operand, visit)
+		for _, item := range node.List {
+			Walk(item, visit)
+		}
+
+	case *QuantifiedExpr:
+		Walk(node.Operand, visit)
+		for _, item := range node.List {
+			Walk(item, visit)
+		}
+
 	case *ParenExpr:
 		Walk(node.Inner, visit)
 
@@ -80,7 +111,7 @@ func Walk(n Node, visit Visitor) {
 			}
 		}
 
-	case *TableName, *Literal, *ColumnRef, *Star, *Param, *CreateTable, *DropTable:
+	case *TableName, *Literal, *ColumnRef, *Star, *Param, *DropTable:
 		// Leaves.
 	}
 }

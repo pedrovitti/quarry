@@ -1,0 +1,113 @@
+# The inner SELECT may name columns of the query around it. Resolution is
+# innermost first: a name the inner FROM provides is that column, and only a
+# name it does not provide is looked for outside.
+
+statement ok
+CREATE TABLE parts (id INT, bin INT, name TEXT)
+
+statement ok
+INSERT INTO parts VALUES (1, 10, 'bolt'), (2, 20, 'nut'), (3, 10, 'washer'), (4, NULL, 'cap')
+
+statement ok
+CREATE TABLE bins (id INT, tag TEXT, cap INT)
+
+statement ok
+INSERT INTO bins VALUES (10, 'a', 2), (20, 'b', 1), (30, 'c', 9)
+
+# One value per outer row, and a row that matches nothing reads as NULL.
+query
+SELECT id, (SELECT tag FROM bins WHERE bins.id = parts.bin) AS tag FROM parts ORDER BY id
+----
+id|tag
+1|a
+2|b
+3|a
+4|NULL
+
+# The list a subquery gives may be built from the outer row too, so it differs
+# from one row to the next.
+query
+SELECT id FROM parts WHERE bin IN (SELECT id FROM bins WHERE bins.cap > 1 AND bins.id = parts.bin) ORDER BY id
+----
+id
+1
+3
+
+# A name the inner FROM provides is the inner column, even where the outer
+# query has one of that name as well.
+query
+SELECT (SELECT id FROM bins WHERE tag = 'a') AS a FROM parts WHERE parts.id = 2
+----
+a
+10
+
+# A name it does not provide is looked for outside, unqualified.
+query
+SELECT (SELECT tag FROM bins WHERE bins.id = bin) AS a FROM parts WHERE id = 1
+----
+a
+a
+
+# A name that neither provides is still an unknown column.
+statement error no column "nope"
+SELECT (SELECT tag FROM bins WHERE bins.id = nope) AS a FROM parts
+
+# Nesting is not limited to one level, and the innermost query may reach the
+# outermost row.
+query
+SELECT parts.id FROM parts WHERE bin IN (SELECT b.id FROM bins AS b WHERE b.cap = (SELECT c.cap FROM bins AS c WHERE c.id = parts.bin)) ORDER BY parts.id
+----
+id
+1
+2
+3
+
+# An inner query that reaches nothing gives an empty list, which is false for
+# IN rather than unknown.
+query
+SELECT bin IN (SELECT id FROM bins WHERE bins.id = parts.bin) AS a FROM parts WHERE id = 4
+----
+a
+false
+
+# The row count is judged per outer row, as the row is reached, so a query
+# whose earlier rows each found one value still answers for them.
+query
+SELECT (SELECT tag FROM bins WHERE cap <= parts.id) AS a FROM parts WHERE id = 1
+----
+a
+b
+
+statement error a subquery used as a value returned more than one row
+SELECT (SELECT tag FROM bins WHERE cap <= parts.id) AS a FROM parts ORDER BY parts.id
+
+# A correlated subquery reads the row the statement is working on, so UPDATE
+# and DELETE choose the same way.
+statement ok
+UPDATE parts SET name = (SELECT tag FROM bins WHERE bins.id = parts.bin) WHERE bin IN (SELECT id FROM bins WHERE cap > 1)
+
+query
+SELECT id, name FROM parts ORDER BY id
+----
+id|name
+1|a
+2|nut
+3|a
+4|cap
+
+statement ok
+DELETE FROM parts WHERE bin = ANY (SELECT id FROM bins WHERE bins.cap < parts.id)
+
+query
+SELECT id FROM parts ORDER BY id
+----
+id
+1
+4
+
+# The heading is the whole correlated expression as it was written.
+query
+SELECT (SELECT tag FROM bins WHERE bins.id = parts.bin) FROM parts WHERE id = 1
+----
+(SELECT tag FROM bins WHERE bins.id = parts.bin)
+a

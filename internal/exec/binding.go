@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pedrovitti/quarry/internal/catalog"
+	"github.com/pedrovitti/quarry/internal/storage"
 	"github.com/pedrovitti/quarry/internal/types"
 )
 
@@ -41,6 +42,20 @@ func (c ColumnInfo) Label() string { return c.Name }
 // what names reach it.
 type Binding struct {
 	columns []ColumnInfo
+	// outer is the scope a subquery was compiled inside, and cell holds that
+	// scope's current row while the subquery runs. Both are nil for a query
+	// that stands on its own.
+	outer  *Binding
+	cell   *rowCell
+	engine *Engine
+}
+
+// rowCell carries one query's current row to the subqueries compiled inside
+// it. A subquery is evaluated with the row of the query around it, so it
+// stores that row here before running, and a column resolved to the outer
+// scope reads it back.
+type rowCell struct {
+	row storage.Row
 }
 
 // NewBinding returns a binding over the given columns.
@@ -88,6 +103,36 @@ func (b *Binding) Concat(other *Binding) *Binding {
 	columns = append(columns, b.columns...)
 	columns = append(columns, other.columns...)
 	return &Binding{columns: columns}
+}
+
+// inside returns the binding a subquery of this one compiles against: its own
+// columns first, then this scope, then whatever this scope could already see.
+func (b *Binding) inside(inner *Binding) *Binding {
+	if b.cell == nil {
+		b.cell = &rowCell{}
+	}
+	out := &Binding{columns: inner.columns, outer: b, engine: b.engine}
+	return out
+}
+
+// resolveScope finds a column reference in this binding or, failing that, in
+// the scopes around it. The binding it was found in comes back with it,
+// because a column of an enclosing query is read from that query's cell
+// rather than from the row being evaluated.
+func (b *Binding) resolveScope(table, name string) (int, *Binding, error) {
+	index, err := b.Resolve(table, name)
+	if err == nil {
+		return index, b, nil
+	}
+	if b.outer == nil {
+		return 0, nil, err
+	}
+	index, owner, outerErr := b.outer.resolveScope(table, name)
+	if outerErr != nil {
+		// The innermost scope names the columns the reader was closest to.
+		return 0, nil, err
+	}
+	return index, owner, nil
 }
 
 // Resolve finds the position of a column reference. An unqualified name that

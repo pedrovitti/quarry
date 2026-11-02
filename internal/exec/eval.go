@@ -35,11 +35,14 @@ func Compile(expr ast.Expr, binding *Binding, params []types.Value) (Expr, error
 		return Compile(node.Inner, binding, params)
 
 	case *ast.ColumnRef:
-		index, err := binding.Resolve(node.Table, node.Name)
+		index, owner, err := binding.resolveScope(node.Table, node.Name)
 		if err != nil {
 			return nil, err
 		}
-		return columnExpr{index: index, kind: binding.Column(index).Kind}, nil
+		if owner != binding {
+			return outerColumnExpr{cell: owner.cell, index: index, kind: owner.Column(index).Kind}, nil
+		}
+		return columnExpr{index: index, kind: owner.Column(index).Kind}, nil
 
 	case *ast.Param:
 		if node.Ordinal > len(params) {
@@ -50,6 +53,13 @@ func Compile(expr ast.Expr, binding *Binding, params []types.Value) (Expr, error
 
 	case *ast.Star:
 		return nil, errorf("* cannot be evaluated as a value")
+
+	case *ast.SubqueryExpr:
+		q, err := compileSubquery(node, binding, params)
+		if err != nil {
+			return nil, err
+		}
+		return subqueryExpr{q: q}, nil
 
 	case *ast.UnaryExpr:
 		operand, err := Compile(node.Operand, binding, params)
@@ -78,6 +88,33 @@ func Compile(expr ast.Expr, binding *Binding, params []types.Value) (Expr, error
 			return nil, err
 		}
 		return isNullExpr{operand: operand, negated: node.Negated}, nil
+
+	case *ast.InExpr:
+		operand, err := Compile(node.Operand, binding, params)
+		if err != nil {
+			return nil, err
+		}
+		list, err := compileList(node.List, operand, binding, params)
+		if err != nil {
+			return nil, err
+		}
+		return inExpr{operand: operand, list: list, negated: node.Negated}, nil
+
+	case *ast.QuantifiedExpr:
+		operand, err := Compile(node.Operand, binding, params)
+		if err != nil {
+			return nil, err
+		}
+		list, err := compileList(node.List, operand, binding, params)
+		if err != nil {
+			return nil, err
+		}
+		return quantifiedExpr{
+			operand:    operand,
+			op:         node.Op,
+			quantifier: node.Quantifier,
+			list:       list,
+		}, nil
 
 	case *ast.FuncCall:
 		f, ok := fn.Lookup(node.Name)

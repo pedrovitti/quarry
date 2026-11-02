@@ -67,19 +67,64 @@ func TypeNames() []string {
 	return names
 }
 
-// ColumnDef is one column in a CREATE TABLE.
+// ConstraintKind is what a constraint asserts about a row.
+type ConstraintKind int
+
+const (
+	PrimaryKeyConstraint ConstraintKind = iota
+	UniqueConstraint
+	CheckConstraint
+)
+
+var constraintNames = map[ConstraintKind]string{
+	PrimaryKeyConstraint: "PRIMARY KEY",
+	UniqueConstraint:     "UNIQUE",
+	CheckConstraint:      "CHECK",
+}
+
+func (k ConstraintKind) String() string {
+	if name, ok := constraintNames[k]; ok {
+		return name
+	}
+	return "invalid constraint"
+}
+
+// TableConstraint is a constraint written as an item of its own in the column
+// list rather than beside a column, which is the only way to state one over
+// several columns at once.
+type TableConstraint struct {
+	Kind ConstraintKind
+	// Columns is what a key covers, in the order the constraint lists them.
+	// It is empty for a check.
+	Columns []string
+	// Expr is the condition of a check, and nil for a key.
+	Expr  Expr
+	Start lex.Position
+}
+
+// ColumnDef is one column in a CREATE TABLE, with the constraints written
+// beside it. A column-level PRIMARY KEY or UNIQUE covers that column alone; a
+// column-level CHECK is a condition over the whole row, written where it is
+// most readable.
 type ColumnDef struct {
-	Name    string
-	Type    TypeName
-	NotNull bool
+	Name       string
+	Type       TypeName
+	NotNull    bool
+	PrimaryKey bool
+	Unique     bool
+	// Default is the value the column takes in a row that does not name it,
+	// and nil where the column has no default.
+	Default Expr
+	Check   Expr
 	Start   lex.Position
 }
 
 // CreateTable is a CREATE TABLE statement.
 type CreateTable struct {
-	Name    string
-	Columns []ColumnDef
-	Start   lex.Position
+	Name        string
+	Columns     []ColumnDef
+	Constraints []TableConstraint
+	Start       lex.Position
 }
 
 func (c *CreateTable) Pos() lex.Position { return c.Start }

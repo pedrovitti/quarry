@@ -30,6 +30,8 @@ func precedenceOf(kind lex.Kind) precedence {
 		return andPrec
 	case lex.Eq, lex.NotEq, lex.Less, lex.LessEq, lex.Greater, lex.GreaterEq, lex.Is:
 		return comparisonPrec
+	case lex.In, lex.Not:
+		return comparisonPrec
 	case lex.Concat:
 		return concatPrec
 	case lex.Plus, lex.Minus:
