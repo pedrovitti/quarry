@@ -196,13 +196,13 @@ func (p *Parser) parseAlias() (string, error) {
 // tables. Joins associate to the left, so "a JOIN b JOIN c" nests as
 // "(a JOIN b) JOIN c".
 func (p *Parser) parseTableRef() (ast.TableRef, error) {
-	left, err := p.parseTableName()
+	left, err := p.parseTableSource()
 	if err != nil {
 		return nil, err
 	}
 
 	for p.accept(lex.Join) {
-		right, err := p.parseTableName()
+		right, err := p.parseTableSource()
 		if err != nil {
 			return nil, err
 		}
@@ -216,6 +216,42 @@ func (p *Parser) parseTableRef() (ast.TableRef, error) {
 		left = &ast.Join{Left: left, Right: right, On: on}
 	}
 	return left, nil
+}
+
+// parseTableSource parses one source in a FROM clause: a table name, or a
+// parenthesized SELECT, optionally marked LATERAL, that must then be given a
+// name.
+func (p *Parser) parseTableSource() (ast.TableRef, error) {
+	lateral := p.at(lex.Lateral)
+	if lateral {
+		p.next()
+		if !p.at(lex.LParen) {
+			return nil, unexpected(p.tok, "a subquery after LATERAL")
+		}
+	}
+	if !p.at(lex.LParen) {
+		return p.parseTableName()
+	}
+	pos := p.tok.Pos
+	p.next()
+	if !p.at(lex.Select) {
+		return nil, unexpected(p.tok, "SELECT after ( in FROM")
+	}
+	stmt, err := p.parseSelect()
+	if err != nil {
+		return nil, err
+	}
+	if _, err := p.expect(lex.RParen); err != nil {
+		return nil, unexpected(p.tok, "a closing parenthesis after the subquery")
+	}
+	alias, err := p.parseAlias()
+	if err != nil {
+		return nil, err
+	}
+	if alias == "" {
+		return nil, errorf(pos, "a subquery in FROM needs a name")
+	}
+	return &ast.SubqueryTable{Select: stmt.(*ast.Select), Alias: alias, Lateral: lateral, Start: pos}, nil
 }
 
 // parseTableName parses a table name and its optional alias.

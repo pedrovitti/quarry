@@ -60,6 +60,9 @@ func Walk(n Node, visit Visitor) {
 			walkExpr(constraint.Expr, visit)
 		}
 
+	case *SubqueryTable:
+		Walk(node.Select, visit)
+
 	case *Join:
 		Walk(node.Left, visit)
 		Walk(node.Right, visit)
@@ -79,6 +82,21 @@ func Walk(n Node, visit Visitor) {
 
 	case *IsNullExpr:
 		Walk(node.Operand, visit)
+
+	case *SubqueryExpr:
+		Walk(node.Select, visit)
+
+	case *InExpr:
+		Walk(node.Operand, visit)
+		for _, item := range node.List {
+			Walk(item, visit)
+		}
+
+	case *QuantifiedExpr:
+		Walk(node.Operand, visit)
+		for _, item := range node.List {
+			Walk(item, visit)
+		}
 
 	case *ParenExpr:
 		Walk(node.Inner, visit)

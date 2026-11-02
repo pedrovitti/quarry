@@ -77,7 +77,33 @@ func (i *IsNullExpr) String() string {
 	return i.Operand.String() + " IS NULL"
 }
 
+func predicateKeyword(negated bool, word string) string {
+	if negated {
+		return " NOT " + word + " "
+	}
+	return " " + word + " "
+}
+
+func (i *InExpr) String() string {
+	return i.Operand.String() + predicateKeyword(i.Negated, "IN") + "(" + joinExprs(i.List) + ")"
+}
+
+func (q *QuantifiedExpr) String() string {
+	return q.Operand.String() + " " + q.Op.String() + " " + q.Quantifier.String() +
+		" (" + joinExprs(q.List) + ")"
+}
+
+func joinExprs(list []Expr) string {
+	parts := make([]string, len(list))
+	for n, item := range list {
+		parts[n] = item.String()
+	}
+	return strings.Join(parts, ", ")
+}
+
 func (p *ParenExpr) String() string { return "(" + p.Inner.String() + ")" }
+
+func (s *SubqueryExpr) String() string { return s.Select.String() }
 
 func (i SelectItem) String() string {
 	if i.Alias == "" {
@@ -98,6 +124,14 @@ func (t *TableName) String() string {
 		return QuoteIdent(t.Name)
 	}
 	return QuoteIdent(t.Name) + " AS " + QuoteIdent(t.Alias)
+}
+
+func (s *SubqueryTable) String() string {
+	out := "(" + s.Select.String() + ") AS " + QuoteIdent(s.Alias)
+	if s.Lateral {
+		return "LATERAL " + out
+	}
+	return out
 }
 
 func (j *Join) String() string {

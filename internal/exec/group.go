@@ -88,7 +88,7 @@ func (g *grouping) collect(n ast.Node) error {
 	}
 
 	var err error
-	ast.Walk(n, func(node ast.Node) bool {
+	walkLevel(n, func(node ast.Node) bool {
 		if err != nil {
 			return false
 		}
@@ -147,13 +147,26 @@ func (g *grouping) rewrite(expr ast.Expr) ast.Expr {
 	case *ast.IsNullExpr:
 		return &ast.IsNullExpr{Operand: g.rewrite(node.Operand), Negated: node.Negated}
 	case *ast.FuncCall:
-		args := make([]ast.Expr, len(node.Args))
-		for i, arg := range node.Args {
-			args[i] = g.rewrite(arg)
+		return &ast.FuncCall{Name: node.Name, Args: g.rewriteAll(node.Args), Start: node.Start}
+	case *ast.InExpr:
+		return &ast.InExpr{Operand: g.rewrite(node.Operand), List: g.rewriteAll(node.List), Negated: node.Negated}
+	case *ast.QuantifiedExpr:
+		return &ast.QuantifiedExpr{
+			Operand:    g.rewrite(node.Operand),
+			Op:         node.Op,
+			Quantifier: node.Quantifier,
+			List:       g.rewriteAll(node.List),
 		}
-		return &ast.FuncCall{Name: node.Name, Args: args, Start: node.Start}
 	}
 	return expr
+}
+
+func (g *grouping) rewriteAll(exprs []ast.Expr) []ast.Expr {
+	out := make([]ast.Expr, len(exprs))
+	for i, expr := range exprs {
+		out[i] = g.rewrite(expr)
+	}
+	return out
 }
 
 // compile rewrites an expression and compiles it against the grouped rows. A
@@ -175,7 +188,14 @@ func (g *grouping) compile(expr ast.Expr) (ast.Expr, Expr, error) {
 // never had is reported as the unknown column it is, rather than as one that
 // should have been grouped.
 func (g *grouping) checkGrouped(rewritten ast.Expr) error {
-	for _, ref := range ast.ColumnRefs(rewritten) {
+	var refs []*ast.ColumnRef
+	walkLevel(rewritten, func(node ast.Node) bool {
+		if ref, ok := node.(*ast.ColumnRef); ok {
+			refs = append(refs, ref)
+		}
+		return true
+	})
+	for _, ref := range refs {
 		if _, err := g.binding.Resolve(ref.Table, ref.Name); err == nil {
 			continue
 		}

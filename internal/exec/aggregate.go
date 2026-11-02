@@ -22,10 +22,22 @@ func IsAggregate(call *ast.FuncCall) bool {
 	return false
 }
 
-// hasAggregate reports whether an aggregate appears anywhere in a tree.
+// walkLevel walks a tree without entering its subqueries, whose aggregates and
+// columns belong to the query they sit in rather than to this one.
+func walkLevel(n ast.Node, visit ast.Visitor) {
+	ast.Walk(n, func(node ast.Node) bool {
+		if _, ok := node.(*ast.SubqueryExpr); ok {
+			return false
+		}
+		return visit(node)
+	})
+}
+
+// hasAggregate reports whether an aggregate appears in a tree, outside the
+// subqueries in it.
 func hasAggregate(n ast.Node) bool {
 	found := false
-	ast.Walk(n, func(node ast.Node) bool {
+	walkLevel(n, func(node ast.Node) bool {
 		if call, ok := node.(*ast.FuncCall); ok && IsAggregate(call) {
 			found = true
 		}

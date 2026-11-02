@@ -210,6 +210,77 @@ func (o *trimOp) Next() (storage.Row, bool, error) {
 	return row[:o.keep], true, nil
 }
 
+// rebindOp forwards rows unchanged under another binding, which is how a
+// subquery in FROM trades its inner column qualifiers for its alias.
+type rebindOp struct {
+	input   Rows
+	binding *Binding
+}
+
+func (o *rebindOp) Binding() *Binding { return o.binding }
+
+func (o *rebindOp) Next() (storage.Row, bool, error) {
+	return o.input.Next()
+}
+
+// lateralJoinOp joins its left input to a subquery compiled over the left
+// columns. For each left row it stores that row where the subquery's outer
+// references read from, rebuilds the inner plan, and joins whatever comes
+// back; a left row whose inner result is empty therefore yields nothing.
+type lateralJoinOp struct {
+	left      Rows
+	rebuild   func() (Rows, error)
+	cell      *rowCell
+	predicate *Predicate
+	binding   *Binding
+
+	current storage.Row
+	inner   Rows
+}
+
+func (o *lateralJoinOp) Binding() *Binding { return o.binding }
+
+func (o *lateralJoinOp) Next() (storage.Row, bool, error) {
+	for {
+		if o.inner == nil {
+			row, ok, err := o.left.Next()
+			if err != nil || !ok {
+				return nil, false, err
+			}
+			o.current = row
+			o.cell.row = row
+			inner, err := o.rebuild()
+			if err != nil {
+				return nil, false, err
+			}
+			o.inner = inner
+		}
+
+		for {
+			right, ok, err := o.inner.Next()
+			if err != nil {
+				return nil, false, err
+			}
+			if !ok {
+				o.inner = nil
+				break
+			}
+
+			joined := make(storage.Row, 0, len(o.current)+len(right))
+			joined = append(joined, o.current...)
+			joined = append(joined, right...)
+
+			keep, err := o.predicate.Keep(joined)
+			if err != nil {
+				return nil, false, err
+			}
+			if keep {
+				return joined, true, nil
+			}
+		}
+	}
+}
+
 // sortKey is one ORDER BY term.
 type sortKey struct {
 	expr Expr

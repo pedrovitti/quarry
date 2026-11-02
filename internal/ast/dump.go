@@ -49,6 +49,23 @@ func Dump(n Node) string {
 		}
 		return list("is-null", Dump(node.Operand))
 
+	case *SubqueryExpr:
+		return list("subquery", dumpSelect(node.Select))
+
+	case *InExpr:
+		parts := []string{negatedWord(node.Negated, "in"), Dump(node.Operand)}
+		for _, item := range node.List {
+			parts = append(parts, Dump(item))
+		}
+		return list(parts...)
+
+	case *QuantifiedExpr:
+		parts := []string{quantifiedWord(node.Quantifier, node.Op.String()), Dump(node.Operand)}
+		for _, item := range node.List {
+			parts = append(parts, Dump(item))
+		}
+		return list(parts...)
+
 	case *ParenExpr:
 		// Parentheses are already implied by the S-expression nesting.
 		return Dump(node.Inner)
@@ -58,6 +75,13 @@ func Dump(n Node) string {
 			return QuoteIdent(node.Name)
 		}
 		return list("as", QuoteIdent(node.Name), QuoteIdent(node.Alias))
+
+	case *SubqueryTable:
+		word := "as"
+		if node.Lateral {
+			word = "lateral-as"
+		}
+		return list(word, Dump(node.Select), QuoteIdent(node.Alias))
 
 	case *Join:
 		return list("join", Dump(node.Left), Dump(node.Right), Dump(node.On))
@@ -184,6 +208,20 @@ func dumpSelect(s *Select) string {
 		parts = append(parts, list("offset", Dump(s.Offset)))
 	}
 	return list(parts...)
+}
+
+func quantifiedWord(q Quantifier, word string) string {
+	if q == AllOf {
+		return "all-" + word
+	}
+	return "any-" + word
+}
+
+func negatedWord(negated bool, word string) string {
+	if negated {
+		return "not-" + word
+	}
+	return word
 }
 
 func quoteAll(names []string) []string {

@@ -25,7 +25,7 @@ func (e *Engine) runInsert(stmt *ast.Insert, params []types.Value) (*Result, err
 	// Values are compiled against an empty binding: an INSERT has no row to
 	// read columns from, so "INSERT INTO t VALUES (a)" is a missing-column
 	// error rather than a reference to the row being written.
-	empty := NewBinding(nil)
+	empty := e.scope(NewBinding(nil), nil)
 
 	// The columns the statement does not name are the same in every row, so
 	// what they hold is worked out once.
@@ -173,7 +173,7 @@ func (e *Engine) runUpdate(stmt *ast.Update, params []types.Value) (*Result, err
 		seen[index] = true
 		assignments[i] = index
 
-		compiled, err := Compile(set.Value, binding, params)
+		compiled, err := Compile(set.Value, e.scope(binding, nil), params)
 		if err != nil {
 			return nil, err
 		}
@@ -182,7 +182,7 @@ func (e *Engine) runUpdate(stmt *ast.Update, params []types.Value) (*Result, err
 
 	var predicate *Predicate
 	if stmt.Where != nil {
-		predicate, err = CompilePredicate(stmt.Where, binding, params)
+		predicate, err = CompilePredicate(stmt.Where, e.scope(binding, nil), params)
 		if err != nil {
 			return nil, err
 		}
@@ -261,7 +261,7 @@ func (e *Engine) runDelete(stmt *ast.Delete, params []types.Value) (*Result, err
 
 	var predicate *Predicate
 	if stmt.Where != nil {
-		predicate, err = CompilePredicate(stmt.Where, bindingForTable(table), params)
+		predicate, err = CompilePredicate(stmt.Where, e.scope(bindingForTable(table), nil), params)
 		if err != nil {
 			return nil, err
 		}
