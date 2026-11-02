@@ -24,7 +24,7 @@ func alterEngine(t *testing.T) *exec.Engine {
 	return engine
 }
 
-func mustExec(t *testing.T, engine *exec.Engine, sql string) *exec.Result {
+func execResult(t *testing.T, engine *exec.Engine, sql string) *exec.Result {
 	t.Helper()
 	result, err := engine.Exec(sql)
 	if err != nil {
@@ -33,9 +33,9 @@ func mustExec(t *testing.T, engine *exec.Engine, sql string) *exec.Result {
 	return result
 }
 
-func rowsOf(t *testing.T, engine *exec.Engine, sql string) []string {
+func queryRows(t *testing.T, engine *exec.Engine, sql string) []string {
 	t.Helper()
-	result := mustExec(t, engine, sql)
+	result := execResult(t, engine, sql)
 	out := make([]string, 0, len(result.Rows))
 	for _, row := range result.Rows {
 		cells := make([]string, len(row))
@@ -49,7 +49,7 @@ func rowsOf(t *testing.T, engine *exec.Engine, sql string) []string {
 
 func TestAlterResultShape(t *testing.T) {
 	engine := alterEngine(t)
-	result := mustExec(t, engine, "ALTER TABLE inventory ADD COLUMN bin TEXT")
+	result := execResult(t, engine, "ALTER TABLE inventory ADD COLUMN bin TEXT")
 	if result.Tag != "ALTER TABLE" {
 		t.Fatalf("Tag = %q, want %q", result.Tag, "ALTER TABLE")
 	}
@@ -63,11 +63,11 @@ func TestAlterResultShape(t *testing.T) {
 
 func TestEvolvedSchemaSurvivesDumpAndLoad(t *testing.T) {
 	engine := alterEngine(t)
-	mustExec(t, engine, "ALTER TABLE inventory RENAME COLUMN name TO label")
-	mustExec(t, engine, "ALTER TABLE inventory ADD COLUMN price FLOAT DEFAULT 1")
-	mustExec(t, engine, "ALTER TABLE inventory DROP COLUMN qty")
-	mustExec(t, engine, "ALTER TABLE inventory ALTER COLUMN sku TYPE BIGINT")
-	mustExec(t, engine, "ALTER TABLE inventory RENAME TO stock")
+	execResult(t, engine, "ALTER TABLE inventory RENAME COLUMN name TO label")
+	execResult(t, engine, "ALTER TABLE inventory ADD COLUMN price FLOAT DEFAULT 1")
+	execResult(t, engine, "ALTER TABLE inventory DROP COLUMN qty")
+	execResult(t, engine, "ALTER TABLE inventory ALTER COLUMN sku TYPE BIGINT")
+	execResult(t, engine, "ALTER TABLE inventory RENAME TO stock")
 
 	dump := engine.Dump()
 	restored := exec.New()
@@ -76,8 +76,8 @@ func TestEvolvedSchemaSurvivesDumpAndLoad(t *testing.T) {
 	}
 
 	const q = "SELECT sku, label, price FROM stock ORDER BY sku"
-	got := rowsOf(t, restored, q)
-	want := rowsOf(t, engine, q)
+	got := queryRows(t, restored, q)
+	want := queryRows(t, engine, q)
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("restored rows differ\n--- got\n%v\n--- want\n%v", got, want)
 	}
@@ -88,9 +88,9 @@ func TestEvolvedSchemaSurvivesDumpAndLoad(t *testing.T) {
 
 func TestDumpDeclaresTheCurrentSchema(t *testing.T) {
 	engine := alterEngine(t)
-	mustExec(t, engine, "ALTER TABLE inventory ALTER COLUMN sku TYPE BIGINT")
-	mustExec(t, engine, "ALTER TABLE inventory DROP COLUMN qty")
-	mustExec(t, engine, "ALTER TABLE inventory ADD COLUMN note TEXT")
+	execResult(t, engine, "ALTER TABLE inventory ALTER COLUMN sku TYPE BIGINT")
+	execResult(t, engine, "ALTER TABLE inventory DROP COLUMN qty")
+	execResult(t, engine, "ALTER TABLE inventory ADD COLUMN note TEXT")
 
 	dump := engine.Dump()
 	if !strings.Contains(dump, "BIGINT") {
@@ -117,7 +117,7 @@ func TestPreparedStatementsResolveTheRename(t *testing.T) {
 		t.Fatalf("first execution: %v", err)
 	}
 
-	mustExec(t, engine, "ALTER TABLE inventory RENAME TO stock")
+	execResult(t, engine, "ALTER TABLE inventory RENAME TO stock")
 	if _, err := bySku.Exec(types.Int(1)); err == nil ||
 		!strings.Contains(err.Error(), `table "inventory" does not exist`) {
 		t.Fatalf("after the rename, err = %v, want the unknown-table error", err)
@@ -131,7 +131,7 @@ func TestPreparedStatementsResolveTheRename(t *testing.T) {
 		t.Fatalf("before the column rename: %v", err)
 	}
 
-	mustExec(t, engine, "ALTER TABLE stock RENAME COLUMN name TO label")
+	execResult(t, engine, "ALTER TABLE stock RENAME COLUMN name TO label")
 	if _, err := byName.Exec(types.Int(1)); err == nil ||
 		!strings.Contains(err.Error(), `no column "name"`) {
 		t.Fatalf("after the column rename, err = %v, want the unknown-column error", err)
@@ -157,7 +157,7 @@ func TestFailedStatementLeavesNoTrace(t *testing.T) {
 		}
 	}
 
-	mustExec(t, engine, "ALTER TABLE inventory ADD COLUMN bin TEXT DEFAULT 'a1'")
+	execResult(t, engine, "ALTER TABLE inventory ADD COLUMN bin TEXT DEFAULT 'a1'")
 	if engine.Dump() == before {
 		t.Fatal("a successful statement must change the database")
 	}
@@ -165,7 +165,7 @@ func TestFailedStatementLeavesNoTrace(t *testing.T) {
 
 func TestRenameKeepsTheRowsAndTheCount(t *testing.T) {
 	engine := alterEngine(t)
-	mustExec(t, engine, "ALTER TABLE inventory RENAME TO stock")
+	execResult(t, engine, "ALTER TABLE inventory RENAME TO stock")
 	n, err := engine.RowCount("stock")
 	if err != nil {
 		t.Fatalf("RowCount: %v", err)
@@ -180,7 +180,7 @@ func TestRenameKeepsTheRowsAndTheCount(t *testing.T) {
 
 func TestBackfillIsNotARememberedDefault(t *testing.T) {
 	engine := alterEngine(t)
-	mustExec(t, engine, "ALTER TABLE inventory ADD COLUMN grade INT DEFAULT 9")
+	execResult(t, engine, "ALTER TABLE inventory ADD COLUMN grade INT DEFAULT 9")
 
 	insert, err := engine.Prepare("INSERT INTO inventory (sku, name) VALUES ($1, $2)")
 	if err != nil {
@@ -190,7 +190,7 @@ func TestBackfillIsNotARememberedDefault(t *testing.T) {
 		t.Fatalf("insert: %v", err)
 	}
 
-	rows := rowsOf(t, engine, "SELECT sku, grade FROM inventory ORDER BY sku")
+	rows := queryRows(t, engine, "SELECT sku, grade FROM inventory ORDER BY sku")
 	want := []string{"1|9", "2|9", "3|9", "4|NULL"}
 	if strings.Join(rows, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("grades = %v, want %v", rows, want)
@@ -201,8 +201,8 @@ func TestShellSchemaShowsTheEvolvedTable(t *testing.T) {
 	var out, errOut bytes.Buffer
 	shell := cli.New(&out, &errOut)
 	engine := shell.Engine()
-	mustExec(t, engine, "CREATE TABLE notes (id INT, body TEXT)")
-	mustExec(t, engine, "ALTER TABLE notes RENAME COLUMN body TO content, ADD COLUMN pinned BOOL")
+	execResult(t, engine, "CREATE TABLE notes (id INT, body TEXT)")
+	execResult(t, engine, "ALTER TABLE notes RENAME COLUMN body TO content, ADD COLUMN pinned BOOL")
 
 	schema, err := shell.Meta(".schema notes")
 	if err != nil {
