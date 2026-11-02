@@ -99,7 +99,22 @@ func Dump(n Node) string {
 			if column.NotNull {
 				def = append(def, "not-null")
 			}
+			if column.PrimaryKey {
+				def = append(def, "primary-key")
+			}
+			if column.Unique {
+				def = append(def, "unique")
+			}
+			if column.Default != nil {
+				def = append(def, list("default", Dump(column.Default)))
+			}
+			if column.Check != nil {
+				def = append(def, list("check", Dump(column.Check)))
+			}
 			parts = append(parts, list(def...))
+		}
+		for _, constraint := range node.Constraints {
+			parts = append(parts, dumpConstraint(constraint))
 		}
 		return list(parts...)
 
@@ -107,6 +122,16 @@ func Dump(n Node) string {
 		return list("drop-table", QuoteIdent(node.Name))
 	}
 	return "?"
+}
+
+func dumpConstraint(c TableConstraint) string {
+	switch c.Kind {
+	case PrimaryKeyConstraint:
+		return list(append([]string{"primary-key"}, quoteAll(c.Columns)...)...)
+	case UniqueConstraint:
+		return list(append([]string{"unique"}, quoteAll(c.Columns)...)...)
+	}
+	return list("check", Dump(c.Expr))
 }
 
 func dumpSelect(s *Select) string {

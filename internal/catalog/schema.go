@@ -3,6 +3,7 @@ package catalog
 import (
 	"strings"
 
+	"github.com/pedrovitti/quarry/internal/ast"
 	"github.com/pedrovitti/quarry/internal/types"
 )
 
@@ -10,18 +11,28 @@ import (
 // what "INSERT INTO t VALUES (...)" without a column list means, and what
 // SELECT * expands to.
 type Schema struct {
-	columns []Column
-	byName  map[string]int
+	columns     []Column
+	constraints []Constraint
+	byName      map[string]int
 }
 
-// NewSchema builds a schema. It reports an error if two columns share a name,
-// since every later lookup would then be ambiguous.
+// NewSchema builds a schema whose only constraints are the ones its columns
+// carry. It reports an error if two columns share a name, since every later
+// lookup would then be ambiguous.
 func NewSchema(columns []Column) (*Schema, error) {
+	return NewSchemaWith(columns, nil)
+}
+
+// NewSchemaWith builds a schema with constraints over several columns beside
+// the ones the columns carry themselves.
+func NewSchemaWith(columns []Column, constraints []Constraint) (*Schema, error) {
 	s := &Schema{
-		columns: make([]Column, len(columns)),
-		byName:  make(map[string]int, len(columns)),
+		columns:     make([]Column, len(columns)),
+		constraints: make([]Constraint, len(constraints)),
+		byName:      make(map[string]int, len(columns)),
 	}
 	copy(s.columns, columns)
+	copy(s.constraints, constraints)
 
 	for i, column := range columns {
 		if _, taken := s.byName[column.Name]; taken {
@@ -81,11 +92,37 @@ func (s *Schema) Kinds() []types.Kind {
 	return out
 }
 
-// String renders the schema as a column list.
+// Constraints returns every constraint the schema states, the ones written
+// beside a column first, in column order, then the ones written over several
+// columns, in declaration order.
+//
+// Flattening them into one list is what lets the executor enforce a key
+// without caring which way it was written.
+func (s *Schema) Constraints() []Constraint {
+	out := make([]Constraint, 0, len(s.constraints)+len(s.columns))
+	for _, column := range s.columns {
+		if column.PrimaryKey {
+			out = append(out, Constraint{Kind: ast.PrimaryKeyConstraint, Columns: []string{column.Name}})
+		}
+		if column.Unique {
+			out = append(out, Constraint{Kind: ast.UniqueConstraint, Columns: []string{column.Name}})
+		}
+		if column.Check != nil {
+			out = append(out, Constraint{Kind: ast.CheckConstraint, Expr: column.Check})
+		}
+	}
+	return append(out, s.constraints...)
+}
+
+// String renders the schema as a column list followed by the constraints that
+// were written over several columns.
 func (s *Schema) String() string {
-	parts := make([]string, len(s.columns))
-	for i, column := range s.columns {
-		parts[i] = column.String()
+	parts := make([]string, 0, len(s.columns)+len(s.constraints))
+	for _, column := range s.columns {
+		parts = append(parts, column.String())
+	}
+	for _, constraint := range s.constraints {
+		parts = append(parts, constraint.String())
 	}
 	return strings.Join(parts, ", ")
 }

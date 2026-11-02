@@ -51,6 +51,15 @@ func Walk(n Node, visit Visitor) {
 	case *Delete:
 		walkExpr(node.Where, visit)
 
+	case *CreateTable:
+		for _, column := range node.Columns {
+			walkExpr(column.Default, visit)
+			walkExpr(column.Check, visit)
+		}
+		for _, constraint := range node.Constraints {
+			walkExpr(constraint.Expr, visit)
+		}
+
 	case *Join:
 		Walk(node.Left, visit)
 		Walk(node.Right, visit)
@@ -74,7 +83,7 @@ func Walk(n Node, visit Visitor) {
 	case *ParenExpr:
 		Walk(node.Inner, visit)
 
-	case *TableName, *Literal, *ColumnRef, *Star, *Param, *CreateTable, *DropTable:
+	case *TableName, *Literal, *ColumnRef, *Star, *Param, *DropTable:
 		// Leaves.
 	}
 }

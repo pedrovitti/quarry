@@ -218,20 +218,45 @@ func (d *Delete) String() string {
 	return out
 }
 
+// String renders the column with its constraints in one fixed order, whatever
+// order they were written in, so that two declarations meaning the same thing
+// print the same way.
 func (c ColumnDef) String() string {
 	out := QuoteIdent(c.Name) + " " + c.Type.String()
 	if c.NotNull {
 		out += " NOT NULL"
 	}
+	if c.PrimaryKey {
+		out += " PRIMARY KEY"
+	}
+	if c.Unique {
+		out += " UNIQUE"
+	}
+	if c.Default != nil {
+		out += " DEFAULT " + c.Default.String()
+	}
+	if c.Check != nil {
+		out += " CHECK (" + c.Check.String() + ")"
+	}
 	return out
 }
 
-func (c *CreateTable) String() string {
-	cols := make([]string, len(c.Columns))
-	for i, col := range c.Columns {
-		cols[i] = col.String()
+func (c TableConstraint) String() string {
+	if c.Kind == CheckConstraint {
+		return "CHECK (" + c.Expr.String() + ")"
 	}
-	return "CREATE TABLE " + QuoteIdent(c.Name) + " (" + strings.Join(cols, ", ") + ")"
+	return c.Kind.String() + " (" + strings.Join(quoteAll(c.Columns), ", ") + ")"
+}
+
+func (c *CreateTable) String() string {
+	items := make([]string, 0, len(c.Columns)+len(c.Constraints))
+	for _, col := range c.Columns {
+		items = append(items, col.String())
+	}
+	for _, constraint := range c.Constraints {
+		items = append(items, constraint.String())
+	}
+	return "CREATE TABLE " + QuoteIdent(c.Name) + " (" + strings.Join(items, ", ") + ")"
 }
 
 func (d *DropTable) String() string { return "DROP TABLE " + QuoteIdent(d.Name) }

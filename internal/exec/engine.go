@@ -122,8 +122,8 @@ func (e *Engine) runSelect(stmt *ast.Select, params []types.Value) (*Result, err
 }
 
 func (e *Engine) runCreateTable(stmt *ast.CreateTable) (*Result, error) {
-	if _, err := e.catalog.CreateFromStmt(stmt); err != nil {
-		return nil, errorf("%s", err)
+	if _, err := e.createTable(stmt); err != nil {
+		return nil, err
 	}
 	if _, err := e.store.Create(stmt.Name); err != nil {
 		// The catalog entry would otherwise outlive the failure and leave a
