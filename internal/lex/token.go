@@ -46,18 +46,23 @@ const (
 	As
 	Asc
 	By
+	Check
 	Create
+	Default
 	Delete
 	Desc
 	Distinct
 	Drop
 	False
 	From
+	Group
+	Having
 	In
 	Insert
 	Into
 	Is
 	Join
+	Key
 	Lateral
 	Limit
 	Not
@@ -66,10 +71,12 @@ const (
 	On
 	Or
 	Order
+	Primary
 	Select
 	Set
 	Table
 	True
+	Unique
 	Update
 	Values
 	Where
@@ -112,18 +119,23 @@ var kindNames = map[Kind]string{
 	As:       "AS",
 	Asc:      "ASC",
 	By:       "BY",
+	Check:    "CHECK",
 	Create:   "CREATE",
+	Default:  "DEFAULT",
 	Delete:   "DELETE",
 	Desc:     "DESC",
 	Distinct: "DISTINCT",
 	Drop:     "DROP",
 	False:    "FALSE",
 	From:     "FROM",
+	Group:    "GROUP",
+	Having:   "HAVING",
 	In:       "IN",
 	Insert:   "INSERT",
 	Into:     "INTO",
 	Is:       "IS",
 	Join:     "JOIN",
+	Key:      "KEY",
 	Lateral:  "LATERAL",
 	Limit:    "LIMIT",
 	Not:      "NOT",
@@ -132,10 +144,12 @@ var kindNames = map[Kind]string{
 	On:       "ON",
 	Or:       "OR",
 	Order:    "ORDER",
+	Primary:  "PRIMARY",
 	Select:   "SELECT",
 	Set:      "SET",
 	Table:    "TABLE",
 	True:     "TRUE",
+	Unique:   "UNIQUE",
 	Update:   "UPDATE",
 	Values:   "VALUES",
 	Where:    "WHERE",

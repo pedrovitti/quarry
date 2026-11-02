@@ -1,0 +1,209 @@
+# What a column holds when the statement writing the row says nothing about
+# it, and how that interacts with the other constraints.
+
+statement ok
+CREATE TABLE tickets (id INT PRIMARY KEY, title TEXT NOT NULL, priority INT DEFAULT 3, state TEXT DEFAULT 'open', open BOOL DEFAULT TRUE)
+
+# A column the insert does not name takes its default instead of NULL.
+statement ok
+INSERT INTO tickets (id, title) VALUES (1, 'lights out')
+
+query
+SELECT id, title, priority, state, open FROM tickets
+----
+id|title|priority|state|open
+1|lights out|3|open|true
+
+# What the statement writes wins, and a NULL written on purpose is a NULL:
+# naming the column is what turns the default off, not the value.
+statement ok
+INSERT INTO tickets (id, title, priority, state) VALUES (2, 'disk full', 1, NULL)
+
+query
+SELECT id, priority, state, open FROM tickets WHERE id = 2
+----
+id|priority|state|open
+2|1|NULL|true
+
+# Values without a column list name every column, so no default applies to
+# any of them.
+statement ok
+INSERT INTO tickets VALUES (3, 'slow query', NULL, NULL, NULL)
+
+query
+SELECT id, priority, state, open FROM tickets WHERE id = 3
+----
+id|priority|state|open
+3|NULL|NULL|NULL
+
+# A column with no default is still NULL when nobody names it, so one that is
+# NOT NULL is still a failure.
+statement error column "title" must not be NULL
+INSERT INTO tickets (id) VALUES (4)
+
+query
+SELECT id FROM tickets
+----
+id
+1
+2
+3
+
+# An update writes what it is told and never reaches for a default.
+statement ok
+UPDATE tickets SET priority = NULL WHERE id = 1
+
+query
+SELECT id, priority FROM tickets WHERE id = 1
+----
+id|priority
+1|NULL
+
+# A default is worked out when the table is made, so an expression is reduced
+# to the value it produced and an integer written into a FLOAT column has
+# already widened by the time a row takes it.
+statement ok
+CREATE TABLE reduced (tag TEXT, a INT DEFAULT 2 * 3, b FLOAT DEFAULT 1, c TEXT DEFAULT 'x' || 'y', d INT DEFAULT -1)
+
+statement ok
+INSERT INTO reduced (tag) VALUES ('all defaults')
+
+query
+SELECT tag, a, b, c, d FROM reduced
+----
+tag|a|b|c|d
+all defaults|6|1.0|xy|-1
+
+statement ok
+INSERT INTO reduced (tag, b) VALUES ('one given', 2)
+
+query
+SELECT tag, a, b FROM reduced WHERE tag = 'one given'
+----
+tag|a|b
+one given|6|2.0
+
+# A default that does not fit its column is refused when the table is made,
+# rather than on the first row that needs it.
+statement error column "a": cannot store TEXT value in INT column
+CREATE TABLE bad (a INT DEFAULT 'x')
+
+statement error column "n": cannot store INT value in TEXT column
+CREATE TABLE bad (n TEXT DEFAULT 1)
+
+# And a default has nowhere to read a column from, because there is no row yet.
+statement error no column "b"
+CREATE TABLE bad (a INT DEFAULT b, b INT)
+
+# None of those left a table behind, so the name is still free to take.
+statement ok
+CREATE TABLE bad (a INT DEFAULT 2, b INT)
+
+query
+SELECT a, b FROM bad
+----
+a|b
+
+# NULL is a perfectly good default, and the same as having none.
+statement ok
+CREATE TABLE nulls (a INT DEFAULT NULL, b INT)
+
+statement ok
+INSERT INTO nulls (b) VALUES (1)
+
+query
+SELECT a, b FROM nulls
+----
+a|b
+NULL|1
+
+# A default fills the row before the rest of the constraints look at it, so
+# two rows that both take the same default collide on a unique column.
+statement ok
+CREATE TABLE slots (name TEXT, code TEXT UNIQUE DEFAULT 'unset')
+
+statement ok
+INSERT INTO slots (name) VALUES ('first')
+
+statement error duplicate value ('unset') for UNIQUE (code)
+INSERT INTO slots (name) VALUES ('second')
+
+statement ok
+INSERT INTO slots VALUES ('second', 'taken')
+
+query
+SELECT name, code FROM slots
+----
+name|code
+first|unset
+second|taken
+
+query
+SELECT name FROM slots
+----
+name
+first
+second
+
+# Two rows of one statement both reaching for the same default collide with
+# each other, with nothing in the table for either of them to collide with.
+statement ok
+CREATE TABLE fresh (name TEXT, code TEXT UNIQUE DEFAULT 'unset')
+
+statement error duplicate value ('unset') for UNIQUE (code)
+INSERT INTO fresh (name) VALUES ('one'), ('two')
+
+query
+SELECT name, code FROM fresh
+----
+name|code
+
+# A default that a condition rejects is a failure of the row that took it,
+# not of the table that declared it.
+statement ok
+CREATE TABLE limits (tag TEXT, n INT DEFAULT 0 CHECK (n > 0))
+
+statement error CHECK constraint on "limits" failed
+INSERT INTO limits (tag) VALUES ('takes the default')
+
+statement ok
+INSERT INTO limits VALUES ('given', 5)
+
+query
+SELECT tag, n FROM limits
+----
+tag|n
+given|5
+
+# A default on a NOT NULL column is what makes the column omissible.
+statement ok
+CREATE TABLE stamped (id INT PRIMARY KEY, note TEXT NOT NULL DEFAULT 'none')
+
+statement ok
+INSERT INTO stamped (id) VALUES (1)
+
+statement error column "note" must not be NULL
+INSERT INTO stamped VALUES (2, NULL)
+
+query
+SELECT id, note FROM stamped
+----
+id|note
+1|none
+
+# A default on a primary key column works like any other, and is a duplicate
+# the second time it is used.
+statement ok
+CREATE TABLE only (id INT PRIMARY KEY DEFAULT 1, note TEXT)
+
+statement ok
+INSERT INTO only (note) VALUES ('first')
+
+statement error duplicate value (1) for PRIMARY KEY (id)
+INSERT INTO only (note) VALUES ('second')
+
+query
+SELECT id, note FROM only
+----
+id|note
+1|first

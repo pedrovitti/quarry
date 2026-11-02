@@ -34,6 +34,32 @@ func (p *Parser) parseSelect() (ast.Stmt, error) {
 		stmt.Where = where
 	}
 
+	if p.at(lex.Group) {
+		if err := p.expectKeywords(lex.Group, lex.By); err != nil {
+			return nil, err
+		}
+		group, err := p.parseGroupBy()
+		if err != nil {
+			return nil, err
+		}
+		stmt.GroupBy = group
+	}
+
+	if p.accept(lex.Having) {
+		having, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		stmt.Having = having
+	}
+
+	// The clauses are written in the order they are evaluated, and a HAVING
+	// ahead of its GROUP BY is common enough to name rather than report as an
+	// unexpected keyword.
+	if p.at(lex.Group) {
+		return nil, errorf(p.tok.Pos, "GROUP BY must come before HAVING")
+	}
+
 	if p.at(lex.Order) {
 		if err := p.expectKeywords(lex.Order, lex.By); err != nil {
 			return nil, err
@@ -101,19 +127,51 @@ func (p *Parser) parseSelectList() ([]ast.SelectItem, error) {
 
 // checkStarIsWholeItem rejects a star buried inside a larger expression. The
 // select list is the only place * is allowed at all, and even there it has to
-// be the entire item: "SELECT count(*) + 1" is fine to write but "SELECT * + 1"
-// is not, because a projection is not a value.
+// be the entire item or the argument of count: "SELECT count(*) + 1" is fine
+// to write but "SELECT * + 1" is not, because a projection is not a value.
 func checkStarIsWholeItem(item ast.Expr) error {
 	if _, ok := item.(*ast.Star); ok {
 		return nil
 	}
+
+	// A star inside a call was already held to the count(*) rule as the call
+	// was parsed, so what is left to reject is a star loose in an expression.
+	counted := map[ast.Node]bool{}
+	ast.Walk(item, func(n ast.Node) bool {
+		call, ok := n.(*ast.FuncCall)
+		if !ok {
+			return true
+		}
+		for _, arg := range call.Args {
+			if star, ok := arg.(*ast.Star); ok {
+				counted[star] = true
+			}
+		}
+		return true
+	})
+
 	for _, node := range ast.Inspect(item, func(n ast.Node) bool {
-		_, ok := n.(*ast.Star)
-		return ok
+		return isStar(n) && !counted[n]
 	}) {
 		return errorf(node.Pos(), "* cannot appear inside an expression")
 	}
 	return nil
+}
+
+// parseGroupBy parses the grouping list. The cursor is past GROUP BY.
+func (p *Parser) parseGroupBy() ([]ast.Expr, error) {
+	var exprs []ast.Expr
+	for {
+		expr, err := p.parseExpr()
+		if err != nil {
+			return nil, err
+		}
+		exprs = append(exprs, expr)
+
+		if !p.accept(lex.Comma) {
+			return exprs, nil
+		}
+	}
 }
 
 // parseAlias parses an optional alias, with or without the AS keyword. It

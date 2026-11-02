@@ -1,0 +1,321 @@
+# GROUP BY and HAVING. The rows are inserted so that first-appearance order and
+# alphabetical order disagree, which is what makes the emission order testable.
+
+statement ok
+CREATE TABLE sales (id INT NOT NULL, city TEXT, amount INT, region TEXT)
+
+statement ok
+INSERT INTO sales VALUES (1, 'oslo', 5, 'north'), (2, 'lima', 7, 'south'), (3, 'oslo', 15, 'north'), (4, 'cairo', 3, 'south'), (5, 'lima', 3, 'south'), (6, 'oslo', 10, 'north'), (7, NULL, 4, 'south'), (8, NULL, 6, 'north')
+
+statement ok
+CREATE TABLE staff (city TEXT, people INT)
+
+statement ok
+INSERT INTO staff VALUES ('oslo', 2), ('lima', 1), ('cairo', 4)
+
+statement ok
+CREATE TABLE empty (a INT, b TEXT)
+
+# Groups come out in the order they were first seen, not sorted and not in
+# whatever order a hash table happens to hold them.
+query
+SELECT city, count(*) FROM sales GROUP BY city
+----
+city|count(*)
+oslo|3
+lima|2
+cairo|1
+NULL|2
+
+# All the NULLs are one group, the way DISTINCT treats them as one row.
+query
+SELECT city, sum(amount), min(amount), max(amount), avg(amount) FROM sales GROUP BY city
+----
+city|sum(amount)|min(amount)|max(amount)|avg(amount)
+oslo|30|5|15|10.0
+lima|10|3|7|5.0
+cairo|3|3|3|3.0
+NULL|10|4|6|5.0
+
+query
+SELECT region, count(*), sum(amount) FROM sales GROUP BY region
+----
+region|count(*)|sum(amount)
+north|4|36
+south|4|17
+
+# Two keys make a group of the pair, so the two NULL cities land apart when
+# their regions differ.
+query
+SELECT region, city, count(*), sum(amount) FROM sales GROUP BY region, city
+----
+region|city|count(*)|sum(amount)
+north|oslo|3|30
+south|lima|2|10
+south|cairo|1|3
+south|NULL|1|4
+north|NULL|1|6
+
+# A key is an expression, not only a column.
+query
+SELECT amount > 5, count(*), sum(amount) FROM sales GROUP BY amount > 5
+----
+amount > 5|count(*)|sum(amount)
+false|4|15
+true|4|38
+
+# A select item built out of a grouped column is fine, and so is one that
+# matches the grouping expression outright.
+query
+SELECT upper(city), count(*) FROM sales GROUP BY city
+----
+upper(city)|count(*)
+OSLO|3
+LIMA|2
+CAIRO|1
+NULL|2
+
+query
+SELECT upper(city), count(*) FROM sales GROUP BY upper(city)
+----
+upper(city)|count(*)
+OSLO|3
+LIMA|2
+CAIRO|1
+NULL|2
+
+query
+SELECT city, sum(amount) * 2 AS doubled FROM sales GROUP BY city
+----
+city|doubled
+oslo|60
+lima|20
+cairo|6
+NULL|20
+
+# A grouped column need not be selected at all.
+query
+SELECT count(*) FROM sales GROUP BY city
+----
+count(*)
+3
+2
+1
+2
+
+# A constant groups everything into one group. There is no positional form
+# here, exactly as ORDER BY 1 is a constant and not the first column.
+query
+SELECT count(*) FROM sales GROUP BY 1
+----
+count(*)
+8
+
+# HAVING filters groups, and keeps only the ones the predicate calls true.
+query
+SELECT city, count(*) FROM sales GROUP BY city HAVING count(*) > 1
+----
+city|count(*)
+oslo|3
+lima|2
+NULL|2
+
+query
+SELECT city, sum(amount) FROM sales GROUP BY city HAVING sum(amount) > 10
+----
+city|sum(amount)
+oslo|30
+
+query
+SELECT city, count(*) FROM sales GROUP BY city HAVING city = 'oslo'
+----
+city|count(*)
+oslo|3
+
+# Unknown is not true, so an unknown HAVING drops the group.
+query
+SELECT city, count(*) FROM sales GROUP BY city HAVING sum(amount) > NULL
+----
+city|count(*)
+
+query
+SELECT city, count(*) FROM sales GROUP BY city HAVING count(*) > 100
+----
+city|count(*)
+
+# HAVING with no GROUP BY judges the one group the whole input forms.
+query
+SELECT count(*) FROM sales HAVING count(*) > 0
+----
+count(*)
+8
+
+query
+SELECT count(*) FROM sales HAVING count(*) > 100
+----
+count(*)
+
+query
+SELECT sum(amount) FROM sales WHERE region = 'north' HAVING sum(amount) > 30
+----
+sum(amount)
+36
+
+# ORDER BY reaches an aggregate by its output name.
+query
+SELECT city, count(*) AS n FROM sales WHERE city IS NOT NULL GROUP BY city ORDER BY n DESC
+----
+city|n
+oslo|3
+lima|2
+cairo|1
+
+# And by the aggregate itself, even when it is not in the select list.
+query
+SELECT city FROM sales WHERE city IS NOT NULL GROUP BY city ORDER BY sum(amount) DESC
+----
+city
+oslo
+lima
+cairo
+
+query
+SELECT city FROM sales WHERE city IS NOT NULL GROUP BY city ORDER BY sum(amount) LIMIT 2
+----
+city
+cairo
+lima
+
+query
+SELECT city, count(*) AS n FROM sales GROUP BY city ORDER BY city LIMIT 2 OFFSET 1
+----
+city|n
+cairo|1
+lima|2
+
+# Grouping over a join, with the key qualified.
+query
+SELECT s.city, count(*), sum(s.amount) FROM sales s JOIN staff t ON s.city = t.city GROUP BY s.city
+----
+city|count(*)|sum(s.amount)
+oslo|3|30
+lima|2|10
+cairo|1|3
+
+query
+SELECT t.people, count(*) FROM sales s JOIN staff t ON s.city = t.city GROUP BY t.people ORDER BY t.people
+----
+people|count(*)
+1|2
+2|3
+4|1
+
+# Empty input splits on whether there is a GROUP BY: no groups means no rows,
+# but an ungrouped aggregate still answers for the empty set.
+query
+SELECT count(*) FROM empty
+----
+count(*)
+0
+
+query
+SELECT a, count(*) FROM empty GROUP BY a
+----
+a|count(*)
+
+query
+SELECT count(*) FROM empty GROUP BY 1
+----
+count(*)
+
+query
+SELECT count(*) FROM empty HAVING count(*) = 0
+----
+count(*)
+0
+
+query
+SELECT count(*), sum(a), avg(a), min(b) FROM empty
+----
+count(*)|sum(a)|avg(a)|min(b)
+0|NULL|NULL|NULL
+
+query
+SELECT count(*) FROM sales WHERE region = 'west' GROUP BY city
+----
+count(*)
+
+# A column that is neither grouped nor aggregated has no single value to show.
+statement error column "amount" must appear in GROUP BY or be used in an aggregate
+SELECT city, amount FROM sales GROUP BY city
+
+statement error column "city" must appear in GROUP BY or be used in an aggregate
+SELECT city FROM sales GROUP BY region
+
+statement error column "id" must appear in GROUP BY or be used in an aggregate
+SELECT * FROM sales GROUP BY city
+
+statement error column "amount" must appear in GROUP BY or be used in an aggregate
+SELECT city FROM sales GROUP BY city ORDER BY amount
+
+statement error column "city" must appear in GROUP BY or be used in an aggregate
+SELECT count(*) FROM sales HAVING city = 'oslo'
+
+statement error column "amount" must appear in GROUP BY or be used in an aggregate
+SELECT count(*) FROM sales GROUP BY city HAVING amount > 1
+
+# Grouping runs before the select list, so it cannot see output names. HAVING
+# is on the same side of that line; ORDER BY is on the other.
+statement error no column "c"
+SELECT city AS c, count(*) FROM sales GROUP BY c
+
+statement error no column "n"
+SELECT city, count(*) AS n FROM sales GROUP BY city HAVING n > 1
+
+statement error an aggregate is not allowed in GROUP BY
+SELECT count(*) FROM sales GROUP BY count(*)
+
+statement error an aggregate is not allowed in WHERE
+SELECT city, count(*) FROM sales WHERE count(*) > 1 GROUP BY city
+
+statement error GROUP BY must come before HAVING
+SELECT city, count(*) FROM sales HAVING count(*) > 1 GROUP BY city
+
+statement error is not a condition
+SELECT city, count(*) FROM sales GROUP BY city HAVING 'x'
+
+statement error unexpected identifier "city"
+SELECT count(*) FROM sales GROUP city
+
+statement error unexpected end of input
+SELECT count(*) FROM sales GROUP BY
+
+# GROUP and HAVING are reserved now, so using them as names needs quoting --
+# and quoting still works.
+statement ok
+CREATE TABLE "group" ("having" INT)
+
+statement ok
+INSERT INTO "group" VALUES (1), (1), (2)
+
+query
+SELECT "having", count(*) FROM "group" GROUP BY "having"
+----
+having|count(*)
+1|2
+2|1
+
+# Nothing here disturbed an ungrouped query.
+query
+SELECT city, amount FROM sales WHERE id < 3
+----
+city|amount
+oslo|5
+lima|7
+
+query
+SELECT DISTINCT region FROM sales
+----
+region
+north
+south
